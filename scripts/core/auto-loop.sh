@@ -30,6 +30,23 @@
 #   MAX_LOGS=200                # Max cycle logs to keep
 #   AUTO_LOOP_PROTECT_GITIGNORE=1
 #                               # Restore .gitignore if a cycle mutates it
+#   AUTO_LOOP_USE_CLAUDE_WATCH=0
+#                               # Feature flag (default OFF): wrap ENGINE=claude cycles with the
+#                               # claude-watch reliability supervisor (idle-timeout + max-duration)
+#                               # instead of the hand-rolled max-duration-only watchdog. See
+#                               # docs/devops/2026-07-24-claude-watch-dogfood-integration.md before
+#                               # enabling — long sub-agent calls can go silent on stdout for the
+#                               # full duration of their work, which is a real false-positive risk.
+#   CLAUDE_WATCH_BIN=...        # Optional claude-watch executable override
+#   CLAUDE_WATCH_IDLE_TIMEOUT=900
+#                               # Seconds of stdout silence before claude-watch kills the cycle
+#                               # (only used when AUTO_LOOP_USE_CLAUDE_WATCH=1)
+#   CLAUDE_WATCH_MAX_DURATION=$CYCLE_TIMEOUT_SECONDS
+#                               # Seconds; wall-clock ceiling passed to claude-watch (defaults to
+#                               # the same value as CYCLE_TIMEOUT_SECONDS)
+#   CLAUDE_WATCH_GRACE_PERIOD=10
+#                               # Seconds between claude-watch's SIGTERM and SIGKILL
+#   CLAUDE_WATCH_WEBHOOK=...    # Optional webhook URL for claude-watch failure alerts (empty = none)
 # ============================================================
 
 set -euo pipefail
@@ -60,7 +77,16 @@ COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-300}"
 LIMIT_WAIT_SECONDS="${LIMIT_WAIT_SECONDS:-3600}"
 MAX_LOGS="${MAX_LOGS:-200}"
 AUTO_LOOP_PROTECT_GITIGNORE="${AUTO_LOOP_PROTECT_GITIGNORE:-1}"
+AUTO_LOOP_USE_CLAUDE_WATCH="${AUTO_LOOP_USE_CLAUDE_WATCH:-0}"
+CLAUDE_WATCH_BIN="${CLAUDE_WATCH_BIN:-}"
+CLAUDE_WATCH_IDLE_TIMEOUT="${CLAUDE_WATCH_IDLE_TIMEOUT:-900}"
+CLAUDE_WATCH_MAX_DURATION="${CLAUDE_WATCH_MAX_DURATION:-$CYCLE_TIMEOUT_SECONDS}"
+CLAUDE_WATCH_GRACE_PERIOD="${CLAUDE_WATCH_GRACE_PERIOD:-10}"
+CLAUDE_WATCH_WEBHOOK="${CLAUDE_WATCH_WEBHOOK:-}"
 RESOLVED_ENGINE_BIN=""
+RESOLVED_CLAUDE_WATCH_BIN=""
+CLAUDE_WATCH_ACTIVE=0
+CYCLE_TIMEOUT_LABEL="${CYCLE_TIMEOUT_SECONDS}s"
 
 if [ "$ENGINE" != "claude" ] && [ "$ENGINE" != "codex" ]; then
     echo "Error: ENGINE must be 'claude' or 'codex' (received: '$ENGINE')."
@@ -383,6 +409,26 @@ resolve_engine_bin() {
     esac
 }
 
+resolve_claude_watch_bin() {
+    if [ -n "$CLAUDE_WATCH_BIN" ]; then
+        if [ -x "$CLAUDE_WATCH_BIN" ]; then
+            echo "$CLAUDE_WATCH_BIN"
+            return 0
+        fi
+        if command -v "$CLAUDE_WATCH_BIN" >/dev/null 2>&1; then
+            command -v "$CLAUDE_WATCH_BIN"
+            return 0
+        fi
+    fi
+
+    if command -v claude-watch >/dev/null 2>&1; then
+        command -v claude-watch
+        return 0
+    fi
+
+    return 1
+}
+
 run_codex_cycle() {
     local prompt="$1"
     local output_file timeout_flag message_file
@@ -436,10 +482,24 @@ run_codex_cycle() {
 
 run_claude_cycle() {
     local prompt="$1"
+    if [ "$CLAUDE_WATCH_ACTIVE" -eq 1 ]; then
+        run_claude_cycle_watched "$prompt"
+    else
+        run_claude_cycle_legacy "$prompt"
+    fi
+}
+
+# Default path (AUTO_LOOP_USE_CLAUDE_WATCH=0, or claude-watch unresolvable).
+# Byte-for-byte the same behavior as before this integration was added.
+run_claude_cycle_legacy() {
+    local prompt="$1"
     local output_file timeout_flag
 
     output_file=$(mktemp)
     timeout_flag=$(mktemp)
+
+    CYCLE_OUTPUT_FORMAT="json"
+    CYCLE_TIMEOUT_LABEL="${CYCLE_TIMEOUT_SECONDS}s"
 
     set +e
     (
@@ -486,6 +546,68 @@ run_claude_cycle() {
     rm -f "$timeout_flag"
 }
 
+# Opt-in path (AUTO_LOOP_USE_CLAUDE_WATCH=1 and claude-watch resolvable).
+# Wraps the claude invocation with claude-watch for real idle-timeout detection
+# instead of the max-duration-only watchdog above. Requires --output-format
+# stream-json (verified empirically: --verbose is required alongside it, and
+# the NDJSON stream goes silent for the full duration of any sub-agent tool
+# call rather than emitting incremental events — see the devops doc).
+run_claude_cycle_watched() {
+    local prompt="$1"
+    local output_file
+
+    output_file=$(mktemp)
+    CYCLE_OUTPUT_FORMAT="stream-json"
+
+    set +e
+    (
+        cd "$PROJECT_DIR" || exit 1
+        local claude_cmd=("$RESOLVED_ENGINE_BIN" "-p" "$prompt" "--output-format" "stream-json" "--verbose")
+        if [ -n "$MODEL" ]; then
+            claude_cmd+=("--model" "$MODEL")
+        fi
+        if [ -n "$CLAUDE_PERMISSION_MODE" ]; then
+            claude_cmd+=("--permission-mode" "$CLAUDE_PERMISSION_MODE")
+        fi
+
+        local watch_cmd=("$RESOLVED_CLAUDE_WATCH_BIN" "run" \
+            "--idle-timeout" "${CLAUDE_WATCH_IDLE_TIMEOUT}s" \
+            "--max-duration" "${CLAUDE_WATCH_MAX_DURATION}s" \
+            "--grace-period" "${CLAUDE_WATCH_GRACE_PERIOD}s" \
+            "--transcript-format" "stream-json")
+        if [ -n "$CLAUDE_WATCH_WEBHOOK" ]; then
+            watch_cmd+=("--webhook" "$CLAUDE_WATCH_WEBHOOK")
+        fi
+        watch_cmd+=("--")
+        watch_cmd+=("${claude_cmd[@]}")
+
+        "${watch_cmd[@]}"
+    ) > "$output_file" 2>&1
+    EXIT_CODE=$?
+    set -e
+
+    OUTPUT=$(cat "$output_file")
+    RESULT_MESSAGE="$OUTPUT"
+    rm -f "$output_file"
+
+    # claude-watch exit codes: 0 clean, 1 idle-timeout, 2 max-duration,
+    # 3/4 stream-json-only silent-failure detectors, otherwise the wrapped
+    # claude process's own exit code passed through unchanged.
+    case "$EXIT_CODE" in
+        1)
+            CYCLE_TIMED_OUT=1
+            CYCLE_TIMEOUT_LABEL="${CLAUDE_WATCH_IDLE_TIMEOUT}s idle-timeout"
+            ;;
+        2)
+            CYCLE_TIMED_OUT=1
+            CYCLE_TIMEOUT_LABEL="${CLAUDE_WATCH_MAX_DURATION}s max-duration"
+            ;;
+        *)
+            CYCLE_TIMED_OUT=0
+            ;;
+    esac
+}
+
 run_engine_cycle() {
     local prompt="$1"
     case "$ENGINE" in
@@ -509,6 +631,47 @@ extract_cycle_metadata() {
     CYCLE_TYPE="${ENGINE}_exec"
 
     if [ "$ENGINE" = "claude" ]; then
+        if [ "${CYCLE_OUTPUT_FORMAT:-json}" = "stream-json" ]; then
+            # NDJSON transcript (claude-watch path): find the last line whose
+            # .type == "result" and parse metadata from just that line. Non-JSON
+            # lines (e.g. a stray CLI warning printed before the stream starts)
+            # are skipped rather than aborting the whole parse.
+            if command -v jq >/dev/null 2>&1; then
+                result_line=$(echo "$RESULT_MESSAGE" | jq -R -c 'fromjson? | select(.type == "result")' 2>/dev/null | tail -n1 || true)
+                if [ -n "$result_line" ]; then
+                    RESULT_TEXT=$(echo "$result_line" | jq -r '.result // .message // .output_text // empty' 2>/dev/null | head -c 2000 || true)
+
+                    parsed_cost=$(echo "$result_line" | jq -r '.total_cost_usd // .cost_usd // empty' 2>/dev/null || true)
+                    if [ -n "$parsed_cost" ]; then
+                        CYCLE_COST="$parsed_cost"
+                    fi
+
+                    parsed_subtype=$(echo "$result_line" | jq -r '.subtype // empty' 2>/dev/null || true)
+                    if [ -n "$parsed_subtype" ]; then
+                        CYCLE_SUBTYPE="$parsed_subtype"
+                    fi
+
+                    parsed_type=$(echo "$result_line" | jq -r '.type // empty' 2>/dev/null || true)
+                    if [ -n "$parsed_type" ]; then
+                        CYCLE_TYPE="$parsed_type"
+                    fi
+                fi
+            fi
+
+            if [ -z "$RESULT_TEXT" ]; then
+                RESULT_TEXT=$(echo "$OUTPUT" | head -c 2000 || true)
+            fi
+
+            if [ "$CYCLE_SUBTYPE" = "unknown" ]; then
+                if [ "$EXIT_CODE" -eq 0 ]; then
+                    CYCLE_SUBTYPE="success"
+                else
+                    CYCLE_SUBTYPE="error"
+                fi
+            fi
+            return
+        fi
+
         if command -v jq >/dev/null 2>&1; then
             RESULT_TEXT=$(echo "$RESULT_MESSAGE" | jq -r '.result // .message // .output_text // empty' 2>/dev/null | head -c 2000 || true)
             if [ -z "$RESULT_TEXT" ]; then
@@ -588,6 +751,16 @@ if [ ! -f "$PROMPT_FILE" ]; then
     exit 1
 fi
 
+# claude-watch is an optional dependency: never hard-fail the loop over it.
+# Only relevant for ENGINE=claude; AUTO_LOOP_USE_CLAUDE_WATCH is ignored otherwise.
+if [ "$AUTO_LOOP_USE_CLAUDE_WATCH" = "1" ] && [ "$ENGINE" = "claude" ]; then
+    if RESOLVED_CLAUDE_WATCH_BIN="$(resolve_claude_watch_bin)"; then
+        CLAUDE_WATCH_ACTIVE=1
+    else
+        log "AUTO_LOOP_USE_CLAUDE_WATCH=1 but claude-watch binary not found; falling back to legacy max-duration-only watchdog for this run."
+    fi
+fi
+
 # Write PID file
 echo $$ > "$PID_FILE"
 
@@ -624,6 +797,13 @@ if [ -n "$engine_version" ]; then
     fi
 fi
 log "Interval: ${LOOP_INTERVAL}s | Timeout: ${CYCLE_TIMEOUT_SECONDS}s | Breaker: ${MAX_CONSECUTIVE_ERRORS} errors"
+if [ "$ENGINE" = "claude" ]; then
+    if [ "$CLAUDE_WATCH_ACTIVE" -eq 1 ]; then
+        log "claude-watch: ACTIVE ($RESOLVED_CLAUDE_WATCH_BIN) | idle-timeout: ${CLAUDE_WATCH_IDLE_TIMEOUT}s | max-duration: ${CLAUDE_WATCH_MAX_DURATION}s | grace-period: ${CLAUDE_WATCH_GRACE_PERIOD}s"
+    else
+        log "claude-watch: inactive (AUTO_LOOP_USE_CLAUDE_WATCH=$AUTO_LOOP_USE_CLAUDE_WATCH) | using legacy max-duration-only watchdog"
+    fi
+fi
 
 # === Main Loop ===
 
@@ -691,7 +871,7 @@ This is Cycle #$loop_count. Act decisively."
         if validate_consensus && consensus_changed_since_backup; then
             cycle_soft_timeout=1
         else
-            cycle_failed_reason="Timed out after ${CYCLE_TIMEOUT_SECONDS}s"
+            cycle_failed_reason="Timed out after ${CYCLE_TIMEOUT_LABEL}"
         fi
     elif [ "$EXIT_CODE" -ne 0 ]; then
         cycle_failed_reason="Exit code $EXIT_CODE"
@@ -702,7 +882,7 @@ This is Cycle #$loop_count. Act decisively."
     fi
 
     if [ "$cycle_soft_timeout" -eq 1 ]; then
-        log_cycle "$loop_count" "OK" "Timed out after ${CYCLE_TIMEOUT_SECONDS}s but consensus was updated; keeping progress (cost: ${CYCLE_COST}, subtype: ${CYCLE_SUBTYPE})"
+        log_cycle "$loop_count" "OK" "Timed out after ${CYCLE_TIMEOUT_LABEL} but consensus was updated; keeping progress (cost: ${CYCLE_COST}, subtype: ${CYCLE_SUBTYPE})"
         if [ -n "$RESULT_TEXT" ]; then
             log_cycle "$loop_count" "SUMMARY" "$(echo "$RESULT_TEXT" | head -c 300)"
         fi
