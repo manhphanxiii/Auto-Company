@@ -148,6 +148,7 @@ projects/*
 !projects/snapog/
 !projects/spendsentry/
 !projects/_archive/
+!projects/claude-watch/
 
 # Local/private outputs (do not publish)
 AGENTS.md
