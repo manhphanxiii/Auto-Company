@@ -147,6 +147,7 @@ projects/*
 !projects/.gitkeep
 !projects/snapog/
 !projects/spendsentry/
+!projects/_archive/
 
 # Local/private outputs (do not publish)
 AGENTS.md

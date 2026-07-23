@@ -1,0 +1,466 @@
+<title>OpenRanker — Product &amp; Pricing Analysis</title>
+<style>
+  :root{
+    --paper:#F5F6F1; --surface:#FFFFFF; --ink:#182420; --ink-soft:#4C574F; --ink-faint:#7C8880;
+    --line:#DBE0D4; --accent:#1F6F52; --accent-soft:#E3EEE6; --amber:#B0742A; --amber-soft:#F3E6D3;
+    --rust:#A83E32; --rust-soft:#F3DEDA; --slate:#3E5C76; --slate-soft:#E1E8EE;
+    --shadow:0 1px 2px rgba(24,36,32,.06),0 8px 24px rgba(24,36,32,.05);
+    --font-display:Georgia,"Iowan Old Style","Palatino Linotype","Times New Roman",serif;
+    --font-body:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --font-mono:ui-monospace,"SF Mono","Cascadia Code","Roboto Mono",Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#12100D; --surface:#181F1B; --ink:#ECEFEA; --ink-soft:#A9B3AC; --ink-faint:#6F7B75;
+      --line:#2B3530; --accent:#52C99A; --accent-soft:#1E332A; --amber:#E0A050; --amber-soft:#3A2E1C;
+      --rust:#E08072; --rust-soft:#3A2320; --slate:#8FB0D0; --slate-soft:#1E2C38;
+      --shadow:0 1px 2px rgba(0,0,0,.35),0 8px 24px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#12100D; --surface:#181F1B; --ink:#ECEFEA; --ink-soft:#A9B3AC; --ink-faint:#6F7B75;
+    --line:#2B3530; --accent:#52C99A; --accent-soft:#1E332A; --amber:#E0A050; --amber-soft:#3A2E1C;
+    --rust:#E08072; --rust-soft:#3A2320; --slate:#8FB0D0; --slate-soft:#1E2C38;
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 8px 24px rgba(0,0,0,.4);
+  }
+  :root[data-theme="light"]{
+    --paper:#F5F6F1; --surface:#FFFFFF; --ink:#182420; --ink-soft:#4C574F; --ink-faint:#7C8880;
+    --line:#DBE0D4; --accent:#1F6F52; --accent-soft:#E3EEE6; --amber:#B0742A; --amber-soft:#F3E6D3;
+    --rust:#A83E32; --rust-soft:#F3DEDA; --slate:#3E5C76; --slate-soft:#E1E8EE;
+    --shadow:0 1px 2px rgba(24,36,32,.06),0 8px 24px rgba(24,36,32,.05);
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--font-body);line-height:1.62;-webkit-font-smoothing:antialiased;}
+  ::selection{background:var(--accent-soft);color:var(--accent);}
+  a{color:var(--accent);}
+  a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  .cover{max-width:1180px;margin:0 auto;padding:4.5rem 1.5rem 2.5rem;}
+  .cover .kicker{font-family:var(--font-mono);font-size:.78rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);}
+  .cover h1{font-family:var(--font-display);font-size:clamp(2.1rem,4vw,3.3rem);line-height:1.08;margin:.5rem 0 1rem;text-wrap:balance;max-width:16ch;}
+  .cover .dek{max-width:62ch;color:var(--ink-soft);font-size:1.08rem;margin:0 0 1.5rem;}
+  .cover .meta{display:flex;flex-wrap:wrap;gap:.5rem 1.6rem;font-family:var(--font-mono);font-size:.78rem;color:var(--ink-faint);border-top:1px solid var(--line);padding-top:1rem;}
+  .cover .meta b{color:var(--ink-soft);font-weight:600;}
+
+  .callout{max-width:1180px;margin:0 auto 0;padding:0 1.5rem;}
+  .box{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--slate);border-radius:8px;padding:1.1rem 1.3rem;margin-bottom:1rem;box-shadow:var(--shadow);}
+  .box h4{margin:0 0 .5rem;font-family:var(--font-mono);font-size:.74rem;letter-spacing:.08em;text-transform:uppercase;color:var(--slate);}
+  .box p{margin:.3rem 0;font-size:.95rem;color:var(--ink-soft);}
+  .box.warn{border-left-color:var(--rust);}
+  .box.warn h4{color:var(--rust);}
+
+  .layout{display:grid;grid-template-columns:216px minmax(0,1fr);gap:3rem;max-width:1180px;margin:0 auto;padding:2.5rem 1.5rem 6rem;}
+  nav.toc{position:sticky;top:2rem;align-self:start;font-family:var(--font-mono);font-size:.78rem;}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:toc;}
+  nav.toc li{counter-increment:toc;margin-bottom:.55rem;}
+  nav.toc a{display:block;color:var(--ink-soft);text-decoration:none;border-left:2px solid var(--line);padding-left:.7rem;}
+  nav.toc a:hover{color:var(--accent);border-left-color:var(--accent);}
+  nav.toc a::before{content:counter(toc,decimal-leading-zero) "  ";color:var(--ink-faint);}
+
+  main{min-width:0;}
+  section{margin-bottom:4.2rem;scroll-margin-top:1.5rem;}
+  .eyebrow{font-family:var(--font-mono);font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);}
+  h2{font-family:var(--font-display);font-size:1.85rem;margin:.25rem 0 .35rem;text-wrap:balance;}
+  h3{font-family:var(--font-display);font-size:1.28rem;margin:1.8rem 0 .5rem;text-wrap:balance;}
+  p.lede{color:var(--ink-soft);max-width:70ch;font-size:1.03rem;margin:.4rem 0 1.3rem;}
+  p,li{max-width:74ch;}
+  ul,ol{padding-left:1.3rem;}
+  li{margin-bottom:.45rem;}
+  hr.rule{border:none;border-top:1px solid var(--line);margin:0 0 2.4rem;}
+
+  .tag{font-family:var(--font-mono);font-size:.66rem;letter-spacing:.04em;text-transform:uppercase;padding:.1em .5em;border-radius:3px;white-space:nowrap;display:inline-block;}
+  .tag.strong{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent);}
+  .tag.weak{background:transparent;color:var(--amber);border:1px dashed var(--amber);}
+  .tag.inferred{background:var(--slate-soft);color:var(--slate);border:1px solid var(--slate);}
+  .tag.user{background:var(--rust-soft);color:var(--rust);border:1px dotted var(--rust);}
+
+  .mat{font-family:var(--font-mono);font-size:.66rem;letter-spacing:.03em;text-transform:uppercase;padding:.1em .55em;border-radius:99px;white-space:nowrap;display:inline-block;}
+  .mat.complete{background:var(--accent-soft);color:var(--accent);}
+  .mat.partial{background:var(--amber-soft);color:var(--amber);}
+  .mat.stub{background:var(--rust-soft);color:var(--rust);}
+  .mat.flag{background:var(--slate-soft);color:var(--slate);}
+
+  .table-wrap{overflow-x:auto;margin:1rem 0 1.6rem;border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);background:var(--surface);}
+  table{border-collapse:collapse;width:100%;min-width:640px;font-size:.9rem;}
+  th,td{text-align:left;padding:.65rem .9rem;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{font-family:var(--font-mono);font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);background:var(--paper);position:sticky;top:0;}
+  tr:last-child td{border-bottom:none;}
+  td.num,th.num{font-variant-numeric:tabular-nums;text-align:right;}
+
+  .persona{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:1.2rem 1.4rem;margin-bottom:1.3rem;box-shadow:var(--shadow);}
+  .persona h4{margin:0 0 .3rem;font-family:var(--font-display);font-size:1.1rem;}
+  .persona .role{font-family:var(--font-mono);font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);margin-bottom:.6rem;display:block;}
+  .story{font-size:.94rem;margin:.4rem 0;padding-left:1rem;border-left:2px solid var(--line);}
+
+  .wow{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:1.4rem 1.5rem;margin-bottom:1.4rem;box-shadow:var(--shadow);}
+  .wow h4{font-family:var(--font-display);font-size:1.2rem;margin:0 0 .8rem;}
+  .wow dl{display:grid;grid-template-columns:120px 1fr;gap:.5rem 1rem;margin:0;}
+  .wow dt{font-family:var(--font-mono);font-size:.68rem;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);padding-top:.15rem;}
+  .wow dd{margin:0;font-size:.93rem;color:var(--ink-soft);}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;}
+  @media (max-width:720px){.grid2{grid-template-columns:1fr;} .layout{grid-template-columns:1fr;} nav.toc{position:static;margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--line);}
+    nav.toc ol{columns:2;} }
+
+  footer{max-width:1180px;margin:0 auto;padding:0 1.5rem 5rem;color:var(--ink-faint);font-size:.85rem;border-top:1px solid var(--line);padding-top:1.6rem;}
+  footer p{max-width:none;}
+</style>
+
+<div class="cover">
+  <div class="kicker">Internal · Product &amp; Pricing Strategy</div>
+  <h1>OpenRanker: a codebase read as a product</h1>
+  <p class="dek">A reverse-engineered, product-level analysis of the OpenRanker SEO rank-tracking platform — features, UX, user stories, activation mechanics, and pricing signals — built for internal comparison and pricing strategy work.</p>
+  <div class="meta"><span><b>Prepared for:</b> Internal product &amp; pricing team</span><span><b>Method:</b> Static codebase review, product-level only</span><span><b>Confidentiality:</b> Internal use — no source, no schema, no paths</span></div>
+</div>
+
+<div class="callout">
+  <div class="box">
+    <h4>Assumptions taken (input tool failed twice — flagging rather than guessing silently)</h4>
+    <p><b>Primary persona</b> — treated as SEO agencies/freelancers managing multiple client sites, with in-house teams as secondary. <span class="tag inferred">inferred</span> Grounded in per-project role-based sharing, multi-project structure, and Vietnam-first billing/support. If the actual primary buyer is different, several conclusions in §4, §9, §10 should be re-weighted.</p>
+    <p><b>Wow moment</b> — treated as first live rankings (organic + AI Overview) populating immediately after project creation. <span class="tag inferred">inferred</span> No analytics events exist in the codebase to confirm this directly.</p>
+    <p><b>Benchmark scope</b> — no named competitor products (e.g. Ahrefs, SEMrush, SE Ranking) are asserted against; the comparison matrix in §8 is self-contained and dimension-based rather than product-vs-product.</p>
+    <p>Correct any of these and the affected sections can be re-weighted without re-running the research.</p>
+  </div>
+  <div class="box warn">
+    <h4>Scope &amp; confidentiality — honored exclusions</h4>
+    <p>This analysis did not open or reason about: environment/secret files, infrastructure/deployment configs, database migrations, seed/fixture data, or internal security/runbook docs. No source code, file paths, class/function names, route strings, or schema details appear below. Credentials appear present in the repository in a small number of places (e.g. a fallback/default value used when an environment variable is absent) — recommend auditing and rotating as standard practice; no further detail is given here.</p>
+  </div>
+</div>
+
+<div class="layout">
+<nav class="toc" aria-label="Table of contents">
+  <ol>
+    <li><a href="#overview">Product Overview</a></li>
+    <li><a href="#features">Feature Inventory</a></li>
+    <li><a href="#uiux">UI / UX Analysis</a></li>
+    <li><a href="#stories">User Stories</a></li>
+    <li><a href="#wow">Wow Moments &amp; Activation</a></li>
+    <li><a href="#pricing-signals">Pricing Model Signals</a></li>
+    <li><a href="#differentiators">Capability Differentiators</a></li>
+    <li><a href="#comparison">Comparison Readiness</a></li>
+    <li><a href="#pricing-inputs">Pricing Strategy Inputs</a></li>
+    <li><a href="#direction">Product Direction</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<section id="overview">
+  <div class="eyebrow">Section 01</div>
+  <h2>Product Overview</h2>
+  <p class="lede">A scheduled, credit-metered SEO rank-tracking platform, built around one central object — a tracked project — with organic and Google AI Overview position tracking as parallel first-class dimensions.</p>
+
+  <h3>What it is</h3>
+  <p>OpenRanker tracks where a website's target keywords rank in Google search results over time, on a recurring schedule, for both classic organic results and Google's AI Overview answer panel. Around that core loop it layers automatic competitor discovery and market-share benchmarking, keyword clustering, exportable reporting (including a live sync into a customer's own Google Sheet), and a credit-wallet billing model that charges per keyword check rather than a flat seat price. <span class="tag strong">strong evidence</span></p>
+
+  <h3>Core value proposition</h3>
+  <p>"Set up a project once, and get an always-current picture of where you rank — organically and inside AI Overview — against your competitors, without manually re-checking Google." The product's heaviest engineering investment (scheduling, caching, clustering, competitor discovery, AI Overview parsing) is concentrated entirely in delivering this loop reliably and cheaply at scale. <span class="tag inferred">inferred</span> from where feature depth concentrates.</p>
+
+  <h3>Target users / roles</h3>
+  <p>Primary: <b>SEO agencies and freelance consultants</b> managing rank tracking across several client domains at once — supported by per-project ownership, email-based collaborator invites, and a four-tier role model (Owner / Admin / Editor / Viewer) scoped to each individual project rather than one shared account-wide workspace. Secondary: <b>in-house marketing/SEO teams</b> tracking their own domain. A separate, lighter-weight <b>Affiliate partner</b> role exists for referral-driven growth. <span class="tag inferred">inferred persona framing</span> / <span class="tag strong">strong evidence</span> on the underlying sharing mechanics themselves.</p>
+
+  <h3>Platform &amp; technical posture</h3>
+  <p>A server-rendered web application (not a single-page app), reachable only via desktop/mobile browser — no native mobile app and no customer-facing public API were found. <span class="tag strong">strong evidence</span> Interactivity is delivered through partial-page updates and small client-side widgets rather than a full client-side framework, which keeps the core tracking screens fast to build but puts real weight on the widest data tables staying comfortable on small screens (see §3). Background/scheduled work (rank checks, report sync, billing reconciliation) runs on an asynchronous job queue, decoupled from what the user sees synchronously. <span class="tag strong">strong evidence</span></p>
+</section>
+
+<section id="features">
+  <div class="eyebrow">Section 02</div>
+  <h2>Feature Inventory</h2>
+  <p class="lede">Organized by domain. Maturity reflects what a user would actually experience today, not what the data model supports in theory — several features are visibly present in the UI but not functionally wired end-to-end.</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>Feature</th><th>Domain</th><th>Description</th><th>Maturity</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>Project creation wizard</td><td>Ranking</td><td>Create a tracked domain with device/location/language targeting and one or more keyword lists in a single form; triggers an immediate first check.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Scheduled rank checks</td><td>Ranking</td><td>Per-topic weekday / end-of-month schedule drives recurring, automatic keyword position checks.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Organic + AI Overview tracking</td><td>Ranking</td><td>Every position widget (tables, charts, competitor views) has a mirrored AI Overview variant, including reconstructed AI Overview answer content.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Automatic keyword clustering</td><td>Ranking</td><td>Keywords are grouped into "parent keyword" clusters automatically, based on shared top-ranking URLs, not manual tagging.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Manual tagging</td><td>Ranking</td><td>Keywords can carry free-text tags in the data model; no tag creation/filter/management UI was found.</td><td><span class="mat partial">Partial</span></td><td><span class="tag weak">weak</span></td></tr>
+      <tr><td>Bulk keyword delete</td><td>Ranking</td><td>UI reports a successful deletion and count, but the underlying delete action is disabled in code — currently a no-op that misleads the user.</td><td><span class="mat stub">Stub</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Automatic competitor discovery</td><td>Ranking</td><td>Competitor domains are surfaced from live SERP results, not only manually added — with daily leaderboards, market share, and top-1/3/5/10 coverage.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Ranking history &amp; trend charts</td><td>Ranking</td><td>Project-, topic-, keyword-, and cluster-level history charts, with gap-aware trend computation.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>KPI / goal tracking</td><td>Ranking</td><td>A target-position-and-deadline concept exists in the data model and settings form, but the save action never persists the submitted values.</td><td><span class="mat stub">Stub</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>CSV / Excel export</td><td>Reporting</td><td>Client-side export of the keyword and cluster tables.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>AI Overview content export</td><td>Reporting</td><td>Dedicated HTML/CSV export of which keywords triggered an AI Overview, the answer text, and cited sources.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Scheduled Google Sheets sync</td><td>Reporting</td><td>Recurring job pushes ranking data into a customer-owned Google Sheet; one of two documented layout formats is implemented, the other is an empty stub.</td><td><span class="mat partial">Partial</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Scheduled email reports</td><td>Reporting</td><td>A model for attaching report-recipient emails to a project exists; no user-facing configuration screen was found.</td><td><span class="mat stub">Stub</span></td><td><span class="tag weak">weak</span></td></tr>
+      <tr><td>Project sharing &amp; roles</td><td>Collaboration</td><td>Owner/Admin/Editor/Viewer roles, email invitations (including pre-signup, auto-activated invites), enforced on nearly every ranking action.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Account signup / login</td><td>Account</td><td>Email+password and Google OAuth, mandatory email verification, full password-reset lifecycle.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Login audit log</td><td>Account</td><td>Every login recorded (IP, country, device) and shown to the user.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Billing entity ("Organization")</td><td>Account</td><td>Company/tax profile a user can create for invoicing, with tax-ID lookup autofill; not a shared team workspace.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Billing history tab</td><td>Account</td><td>Full table UI exists; the backing data query is hardcoded empty.</td><td><span class="mat stub">Stub</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Activity log tab</td><td>Account</td><td>Filterable UI exists; no backing endpoint was found.</td><td><span class="mat stub">Stub</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Credit wallet &amp; ledger</td><td>Billing</td><td>Per-feature wallet, expiring credit buckets, FIFO consumption, full transaction history shown to the user.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Free plan / trial credits</td><td>Billing</td><td>New wallets auto-grant a fixed free allotment on a short expiry window.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Plan / package purchase</td><td>Billing</td><td>Tiered credit packages with monthly / multi-month discounted terms.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Bank-transfer QR checkout</td><td>Billing</td><td>Local bank-transfer collection with QR code and webhook-based reconciliation; manual admin override for edge cases.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Quick top-up (in-flow)</td><td>Billing</td><td>Low-credit interstitial opens mid-workflow; the modal scaffold exists but the request that generates its payment QR was not found.</td><td><span class="mat partial">Partial</span></td><td><span class="tag weak">weak</span></td></tr>
+      <tr><td>VAT e-invoicing</td><td>Billing</td><td>Compliant electronic invoice generation via a local e-invoice vendor, draft/issued states, line-item tax handling.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>International payment collection</td><td>Billing</td><td>USD price display exists for non-local visitors, but no working non-local payment method (card/PayPal/etc.) was found — only local bank transfer.</td><td><span class="mat stub">Absent</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Legacy-product migration import</td><td>Growth</td><td>Self-serve pipeline that recreates a user's account, projects, and ranking history from a named sibling product, with bonus credit as an incentive.</td><td><span class="mat complete">Complete</span> (auth gap flagged)</td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Affiliate referral tracking</td><td>Growth</td><td>Cookie-based attribution, click logging, KYC-style onboarding, two-tier commission structure, background commission calculation.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Affiliate payouts</td><td>Growth</td><td>Payout data model and admin exist; the request/history endpoints affiliates would use are empty stubs.</td><td><span class="mat stub">Stub</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Affiliate dashboard metrics</td><td>Growth</td><td>Summary stat tiles and a chart render from placeholder values, not live queries.</td><td><span class="mat stub">Stub</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Admin back-office</td><td>Admin/Ops</td><td>Themed admin with import/export, smart filters, background-job and email-log visibility.</td><td><span class="mat complete">Complete</span></td><td><span class="tag strong">strong</span></td></tr>
+      <tr><td>Localization (EN/VI)</td><td>Platform</td><td>Two languages with a working switcher; translation coverage is strong in the core product, near-absent in the affiliate module and some system pages.</td><td><span class="mat partial">Partial</span></td><td><span class="tag strong">strong</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="uiux">
+  <div class="eyebrow">Section 03</div>
+  <h2>UI / UX Analysis</h2>
+  <p class="lede">The product reads as two build-quality tiers inside one app: a polished, real-time-feeling rank-tracking core, and a noticeably plainer set of billing-utility and affiliate screens around it.</p>
+
+  <h3>Screen inventory</h3>
+  <div class="grid2">
+    <div class="box"><h4>Rank tracking (heaviest investment)</h4><p>Dashboard with project cards + trend sparklines · project workspace with sticky header and a bottom tab bar (Overview, Parent Keyword, Competitors, one tab per keyword topic) · dense keyword/cluster data grids with a slide-in detail panel · competitor leaderboards and market-share history · project settings modal · new-project wizard modal.</p></div>
+    <div class="box"><h4>Billing &amp; account</h4><p>Three-tier pricing page with a live price calculator · order/checkout with itemized totals · QR bank-transfer payment modal with polling status · quick top-up interstitial · profile settings with pill tabs (Settings / Bills / Activities) · credit ledger.</p></div>
+    <div class="box"><h4>Affiliate (visibly less polished)</h4><p>Dashboard, links, clicks, referrals, commissions, payouts, settings, terms — reachable as a semi-separate mini-app reusing the top navbar but otherwise plain tables with no cards, icons, or badges.</p></div>
+    <div class="box"><h4>Auth &amp; system</h4><p>Standard login/signup/password flows on a centered card layout · branded 403/404/500/503 error pages · a largely empty placeholder home screen.</p></div>
+  </div>
+
+  <h3>Navigation structure</h3>
+  <p>A single persistent top bar (no left sidebar in active use) is the whole app's primary navigation device; the in-app menu itself is effectively empty, so users navigate mainly by landing on the dashboard and drilling into a project. Depth is shallow by design: dashboard → project → tab → slide-in detail panel — no breadcrumbs, single-level "back" buttons only. Settings, sharing, the new-project wizard, and top-up all live in modals layered on the current screen rather than separate routes. <span class="tag strong">strong evidence</span></p>
+
+  <h3>Design maturity</h3>
+  <table><tbody>
+    <tr><td style="width:160px"><b>Theming</b></td><td>A single cohesive visual system across the core product (rounded cards, subtle status badges, a shared icon set, skeleton loading states); the affiliate module breaks from it visibly.</td></tr>
+    <tr><td><b>Dark mode</b></td><td>The underlying CSS framework defines dark-theme variables, but every page hardcodes a light theme with no toggle or system-preference detection — dark mode exists in the styling layer but is not reachable by users today. <span class="tag strong">strong evidence</span></td></tr>
+    <tr><td><b>Responsiveness</b></td><td>Deliberate and broad at the layout level (grid breakpoints, collapsing nav, stacking cards), but the product's single most important screens — the keyword and competitor data grids — are desktop-oriented and only "responsive" via horizontal scrolling, a real risk if any meaningful share of usage is mobile.</td></tr>
+    <tr><td><b>Accessibility</b></td><td>Partial/default-level: some aria-labels and visually-hidden loading text exist, but most icon-only action buttons (delete, refresh, share) have no accessible label, and semantic landmark elements are used inconsistently.</td></tr>
+    <tr><td><b>i18n coverage</b></td><td>Strong in the core ranking and payment/pricing screens; effectively absent in the affiliate module, most system error pages, and a couple of account screens — a non-English user hits untranslated content specifically in monetization-adjacent and error scenarios.</td></tr>
+  </tbody></table>
+
+  <h3>Interaction patterns</h3>
+  <ul>
+    <li><b>Lazy, section-by-section loading</b> is the dominant pattern — heavy widgets (charts, tables, summaries) fetch only once scrolled into view, each with its own skeleton/spinner state, rather than one big page load. <span class="tag strong">strong evidence</span></li>
+    <li><b>Inline, autosave editing</b> for names, thresholds, and schedule toggles — no separate "Save" step, a small transient confirmation appears and fades.</li>
+    <li><b>One real polling loop</b>: the payment-status widget checks every ~10 seconds while waiting for a bank transfer to clear, then reloads — the product's only near-real-time UI outside the lazy-load pattern.</li>
+    <li><b>Consistent confirm-before-destroy</b> pattern for every delete action, and a shared toast system for background-action feedback.</li>
+    <li><b>Contextual soft paywall</b>: a free-plan user's "Add Topic" button is swapped for a top-up-modal trigger rather than simply disabled — the upsell is inserted directly into the primary workflow, not confined to a separate pricing page. Notable and worth carrying into §5/§9.</li>
+    <li><b>Minimal delight</b>: no onboarding tour, no celebratory animation, no gamification. The one genuinely reactive, satisfying interaction is the pricing page's live price/discount calculator.</li>
+  </ul>
+</section>
+
+<section id="stories">
+  <div class="eyebrow">Section 04</div>
+  <h2>User Stories Reconstruction</h2>
+  <p class="lede">Grouped by persona and mapped to the features/screens that serve them. The shortest path from signup to first value is: sign up → create a project with one keyword list → first check runs automatically → dashboard populates within minutes.</p>
+
+  <div class="persona">
+    <span class="role">Primary — Agency owner / project owner</span>
+    <h4>Runs rank tracking for one or more client domains</h4>
+    <div class="story">As a project owner, I want to set up a domain with its target keywords in one pass, so that I don't have to configure tracking client-by-client from scratch. → served by the project creation wizard.</div>
+    <div class="story">As a project owner, I want rankings checked automatically on a schedule, so that I always have current data without manually re-running checks. → served by per-topic scheduling.</div>
+    <div class="story">As a project owner, I want to see which competitors are beating me and by how much, so that I can prioritize where to invest content/SEO effort. → served by automatic competitor discovery and market-share leaderboards.</div>
+    <div class="story">As a project owner, I want to hand a client a live, always-current ranking sheet, so that I don't have to manually export reports every week. → served by scheduled Google Sheets sync (partially built — one of two layout formats).</div>
+    <div class="story">As a project owner, I want to invite a teammate to a specific client's project without giving them access to everything, so that I can delegate safely. → served by per-project roles and email invitations.</div>
+  </div>
+
+  <div class="persona">
+    <span class="role">Secondary — Team collaborator (Editor / Viewer)</span>
+    <h4>Works inside projects they don't own</h4>
+    <div class="story">As an invited collaborator, I want to be added to a project by email even before I have an account, so that onboarding doesn't block on account creation order. → served by pending-invitation auto-activation on signup.</div>
+    <div class="story">As a viewer, I want to see rankings and competitor data without being able to accidentally change settings or spend credits, so that I can safely be given visibility. → served by the view-only role tier.</div>
+  </div>
+
+  <div class="persona">
+    <span class="role">New / trial user</span>
+    <h4>Evaluating the product before paying</h4>
+    <div class="story">As a new signup, I want to try real rank-tracking without entering payment details, so that I can judge accuracy before committing. → served by the auto-granted free credit allotment.</div>
+    <div class="story">As a free-plan user hitting a limit, I want a fast way to get more credit without losing my place in what I was doing, so that I'm not forced back to a separate pricing page mid-task. → served by the contextual quick top-up modal (partially built — payment-QR request not found).</div>
+  </div>
+
+  <div class="persona">
+    <span class="role">Paying customer</span>
+    <h4>Converts from trial to a recurring package</h4>
+    <div class="story">As a buyer, I want to see exactly what a longer commitment saves me before I pay, so that I can choose confidently. → served by the live price/discount calculator on the pricing page.</div>
+    <div class="story">As a Vietnamese business buyer, I want a proper VAT invoice for my purchase, so that it's usable for my company's accounting. → served by the Organization/tax-ID flow and e-invoice generation.</div>
+    <div class="story">As a buyer, I want to pay the way I normally pay (bank transfer), so that I don't need a card I may not have. → served by the QR bank-transfer flow. <i>(Note: this same design is the reason non-local buyers currently have no path to pay at all — see §6.)</i></div>
+  </div>
+
+  <div class="persona">
+    <span class="role">Affiliate partner</span>
+    <h4>Refers new customers for commission</h4>
+    <div class="story">As an affiliate, I want a trackable link I can share, so that I get credit for signups I bring in. → served by tracking-link generation and cookie-based attribution.</div>
+    <div class="story">As an affiliate, I want to see my commission accrue and request payout, so that referring is worth my time. → <b>half-built</b>: commission accrual works; the payout request/history screens are non-functional stubs, and the dashboard's summary numbers are placeholder values, not real data. This is the single most visible half-finished story in the product — it directly undercuts the incentive loop the whole affiliate feature exists to create.</div>
+  </div>
+
+  <div class="persona">
+    <span class="role">Ops / support admin</span>
+    <h4>Keeps the system running and unblocks edge cases</h4>
+    <div class="story">As support staff, I want to manually reconcile a payment that the automated webhook missed, so that a customer isn't stuck after a real bank transfer. → served by the admin manual-payment-activation tool.</div>
+    <div class="story">As support staff, I want visibility into failed background jobs, so that I can catch a stuck rank-check or export before a customer notices. → served by background-job and per-function lock/error admin visibility.</div>
+  </div>
+
+  <h3>Signals of shifting direction</h3>
+  <p>Several features are visibly present in the UI or data model but not functionally finished: KPI/goal tracking, scheduled email reports, the account "Activities" and "My Bills" tabs, the vertical Google Sheets export format, bulk keyword deletion, and — most consequentially for a growth lever — affiliate payouts and dashboard metrics. Taken together, these read less like abandoned ideas and more like a team that consistently ships the revenue-critical and tracking-critical path first (which is uniformly complete) and leaves the secondary reporting/audit/payout layer for later. <span class="tag inferred">inferred pattern</span></p>
+</section>
+
+<section id="wow">
+  <div class="eyebrow">Section 05</div>
+  <h2>Wow Moments &amp; Activation Analysis</h2>
+  <p class="lede">Two candidate wow moments were found in the product's structure; only the first is directly reachable within minutes of signup.</p>
+
+  <div class="wow">
+    <h4>1 · Real rankings appear almost immediately after setup <span class="tag inferred">inferred as primary — see assumptions</span></h4>
+    <dl>
+      <dt>Why it exists</dt><dd>Resolves the core skepticism anyone evaluating a rank tracker has: "will this actually show me accurate, current data, or stale/approximate numbers?" Triggering a real check at project creation, rather than waiting for the first scheduled run, answers that in minutes instead of a day.</dd>
+      <dt>What creates it</dt><dd>Automation + speed: project creation directly kicks off a full first-check pipeline across every keyword in every topic. The organic result is <i>easy to copy</i> (any rank tracker can auto-check on creation); the AI Overview content reconstruction — parsing and rendering the actual AI-generated answer panel, not just detecting its presence — is comparatively <i>hard to copy</i> and is the more defensible part of this moment.</dd>
+      <dt>Time to value</dt><dd>One form (domain, targeting, keyword list) → immediate background check → dashboard populated. No required verification step, no paywall before this first view. Genuinely front-loaded.</dd>
+      <dt>Friction points</dt><dd>The keyword-paste input requires manually-formatted text with per-line volume parsing — a small but real friction point at the exact moment before value is delivered.</dd>
+      <dt>Margin read</dt><dd>This moment is <b>not free to deliver</b>: every check calls a paid third-party data provider per keyword, and the more elaborate AI Overview reconstruction (fetching and parsing raw page HTML) is the more compute/vendor-cost-heavy of the two provider paths in production use. The product mitigates this with same-day result reuse and per-check credit metering, which ties cost fairly tightly to what's charged — but vendor-cost is only tracked for one of two SERP providers, leaving a visibility gap on the true margin of this exact moment (see §9).</dd>
+    </dl>
+  </div>
+
+  <div class="wow">
+    <h4>2 · Seeing exactly where you stand against named competitors <span class="tag inferred">secondary candidate</span></h4>
+    <dl>
+      <dt>Why it exists</dt><dd>Rankings alone answer "where am I"; competitor leaderboards answer the more emotionally loaded question "who is beating me, and by how much" — a stronger retention hook than raw position data.</dd>
+      <dt>What creates it</dt><dd>Automatic discovery (no manual competitor entry required) plus market-share/coverage math computed and cached daily. Automation here is moderately hard to copy — it depends on already having clean SERP result data to mine competitors out of, which most of the engineering investment elsewhere in the product already provides "for free."</dd>
+      <dt>Time to value</dt><dd>Reachable only after the first check completes and the competitor cache is built — realistically the same session as wow moment #1, but one tab-click deeper, not the very first thing a new user sees.</dd>
+      <dt>Margin read</dt><dd>Cheap to deliver incrementally — it's a derived/cached view over data already collected for wow moment #1, not an additional paid provider call.</dd>
+    </dl>
+  </div>
+
+  <h3>Front-loaded value vs. gated value</h3>
+  <p>This reads as a genuinely <b>front-loaded, product-led</b> activation design: a new signup reaches real product value (actual current rankings) before any payment prompt, gated only by an automatically-granted trial credit balance rather than a sales conversation or a "book a demo" wall. The monetization moment is deliberately deferred to the point where the user wants <i>more</i> (another topic, another refresh) rather than placed before the first value delivery — see the "Add Topic" paywall swap in §3 and the 402-triggered top-up modal in §6. The main risk to this PLG framing is downstream, not upstream: conversion from "I saw value" to "I paid" currently depends entirely on a single country's bank-transfer rail (§6), which caps how much of the activated, ready-to-pay audience can actually complete a purchase.</p>
+</section>
+
+<section id="pricing-signals">
+  <div class="eyebrow">Section 06</div>
+  <h2>Pricing Model Signals</h2>
+  <p class="lede">A credit/usage-based model layered under a simple three-tier plan structure, with monetization deferred until just past the wow moment.</p>
+
+  <h3>Structure observed</h3>
+  <ul>
+    <li><b>Free</b> — auto-granted on signup: a fixed credit allotment expiring after roughly a week, plus a lower structural cap on keywords per topic. <span class="tag strong">strong evidence</span></li>
+    <li><b>Pro</b> — a credit-package selector (package size × 1-month or 6-month commitment, with a visible per-month discount and "you save X" messaging for the longer term) — this is the main revenue tier.</li>
+    <li><b>Custom</b> — "contact us" tier for larger/unlimited needs, routed to direct messaging channels (a mix of regional and international apps) rather than a self-serve checkout — a light sales-assist layer above the self-serve tiers.</li>
+  </ul>
+
+  <h3>Consumption model</h3>
+  <p>Credits are spent per keyword checked (project creation, manual refresh, and scheduled auto-checks all draw from the same wallet), tracked in expiring buckets consumed oldest-first, with a full transaction ledger visible to the user. This is functionally usage-based pricing wearing a "plan" label — the plan purchase determines how many checks you can afford and over what window, not a feature-gate in the traditional SaaS-tier sense (feature access itself barely varies by plan; the free-tier keyword-per-topic cap is the one structural, non-credit gate found). <span class="tag strong">strong evidence</span></p>
+
+  <h3>Payment &amp; compliance infrastructure</h3>
+  <div class="table-wrap"><table><thead><tr><th>Vendor / mechanism</th><th>Role</th><th>Market coverage</th></tr></thead><tbody>
+    <tr><td>Local bank-transfer QR provider</td><td>Primary and effectively only payment-collection method: scan-to-pay with webhook-based reconciliation, manual admin fallback.</td><td>Vietnam only</td></tr>
+    <tr><td>Same provider's e-invoice service</td><td>VAT-compliant electronic invoicing, draft/issued states, tax-line handling.</td><td>Vietnam-specific compliance requirement</td></tr>
+    <tr><td>A second invoicing vendor</td><td>Referenced only as an example value in the data model; no working integration exists — treat as not implemented.</td><td>—</td></tr>
+    <tr><td>Card / international gateway</td><td>Not present. USD price display exists for non-local visitors, but there is no working way for them to actually pay.</td><td>Gap</td></tr>
+  </tbody></table></div>
+
+  <h3>Where monetization sits relative to the wow moment</h3>
+  <p><b>After.</b> The first real value (rankings appearing) is free and automatic. The paywall surfaces contextually the moment a free-plan user tries to extend that value — add a second topic, refresh beyond their credit balance — via a hard block (HTTP-level "payment required" response) paired immediately with an upsell modal, not a silent failure or a separate discovery step. This is a deliberately built monetization funnel, not an afterthought. <span class="tag strong">strong evidence</span></p>
+</section>
+
+<section id="differentiators">
+  <div class="eyebrow">Section 07</div>
+  <h2>Product Capability Differentiators</h2>
+  <ul>
+    <li><b>AI Overview tracking as a first-class, parallel dimension</b> — not a bolt-on flag but mirrored across nearly every ranking widget, including full answer-content reconstruction and cited-source capture. This is the product's clearest technical differentiator. <span class="tag strong">strong evidence</span></li>
+    <li><b>Automatic keyword clustering and competitor discovery</b> — both derived from SERP data the product already collects, rather than requiring manual setup, which reduces ongoing agency labor per client.</li>
+    <li><b>Native, scheduled Google Sheets sync</b> — client-facing reporting that updates itself, rather than a manual export habit.</li>
+    <li><b>A built-in migration/poaching path from a named sibling product</b> — a self-serve "bring your history, get bonus credit" onboarding flow aimed at a specific competitor's existing customer base — notable as a go-to-market mechanism, not just a feature.</li>
+    <li><b>Deep Vietnam-market payment/compliance fit</b> — bank-QR collection plus compliant e-invoicing is a real local moat, but is simultaneously the product's biggest limiter on international expansion (§6).</li>
+    <li><b>Gaps relative to typical category expectations</b>: no public/customer-facing API, no native mobile app, no account-wide multi-tenant "workspace with seats" model (sharing is per-project only), no self-serve notification preferences, no self-serve data export/deletion.</li>
+  </ul>
+</section>
+
+<section id="comparison">
+  <div class="eyebrow">Section 08</div>
+  <h2>Product Comparison Readiness</h2>
+  <p class="lede">A comparison-ready feature matrix, and a proposed set of benchmarking dimensions for evaluating this product against category alternatives (no specific competitor products are asserted against here).</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>Feature</th><th>Category</th><th>Maturity</th><th>Likely differentiator?</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>AI Overview position + content tracking</td><td>Tracking</td><td><span class="mat complete">Complete</span></td><td>Yes</td><td>Depth (full content reconstruction) beyond simple presence detection.</td></tr>
+      <tr><td>Automatic keyword clustering</td><td>Tracking</td><td><span class="mat complete">Complete</span></td><td>Yes</td><td>Reduces manual grouping work per client.</td></tr>
+      <tr><td>Automatic competitor discovery</td><td>Analysis</td><td><span class="mat complete">Complete</span></td><td>Yes</td><td>Not limited to manually-added competitors.</td></tr>
+      <tr><td>Scheduled Google Sheets sync</td><td>Reporting</td><td><span class="mat partial">Partial</span></td><td>Somewhat</td><td>One of two layout formats shipped.</td></tr>
+      <tr><td>Credit/usage-based billing</td><td>Billing</td><td><span class="mat complete">Complete</span></td><td>Depends on category norm</td><td>Differentiator vs. flat-seat tools; parity vs. other usage-based trackers.</td></tr>
+      <tr><td>Per-project role-based sharing</td><td>Collaboration</td><td><span class="mat complete">Complete</span></td><td>No</td><td>Table stakes in the category; lacks an account-wide team/workspace layer some competitors offer.</td></tr>
+      <tr><td>Public/customer API</td><td>Platform</td><td><span class="mat stub">Absent</span></td><td>No (negative gap)</td><td>Common in the category; absence limits agency tool-chain integration.</td></tr>
+      <tr><td>Local (VN) payment + e-invoicing</td><td>Billing</td><td><span class="mat complete">Complete</span></td><td>Yes, regionally</td><td>Strong regional fit, weak international reach.</td></tr>
+      <tr><td>International payment collection</td><td>Billing</td><td><span class="mat stub">Absent</span></td><td>No (negative gap)</td><td>Blocks conversion outside the primary market.</td></tr>
+      <tr><td>Affiliate/referral program</td><td>Growth</td><td><span class="mat partial">Partial</span></td><td>Depends on execution</td><td>Attribution/commission logic solid; payout UX not usable yet.</td></tr>
+      <tr><td>Mobile-responsive data grids</td><td>UX</td><td><span class="mat partial">Partial</span></td><td>No (negative gap)</td><td>Core screens are horizontal-scroll on small screens.</td></tr>
+      <tr><td>Legacy-product migration import</td><td>Growth</td><td><span class="mat complete">Complete</span></td><td>Yes</td><td>Direct customer-acquisition mechanism, not just a feature.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Suggested benchmarking dimensions</h3>
+  <ol>
+    <li>Depth of AI Overview / AI-answer-engine tracking (presence-only vs. full content vs. competitor-in-AIO tracking)</li>
+    <li>Degree of automation in keyword clustering and competitor discovery (manual setup vs. automatic)</li>
+    <li>Billing model transparency and predictability (flat seats vs. credits/usage vs. hybrid)</li>
+    <li>Collaboration model (per-resource sharing vs. account-wide workspace with seats)</li>
+    <li>Reporting/export flexibility (static export vs. live-sync destinations)</li>
+    <li>Payment-method market coverage (local rails vs. global card/wallet support)</li>
+    <li>Time-to-first-value and generosity of the free/trial tier</li>
+    <li>API/platform openness for agency tool-chain integration</li>
+    <li>Mobile usability of core data screens</li>
+    <li>Partner/affiliate program maturity as a growth channel</li>
+  </ol>
+</section>
+
+<section id="pricing-inputs">
+  <div class="eyebrow">Section 09</div>
+  <h2>Pricing Strategy Inputs</h2>
+
+  <h3>Value metric &amp; candidate pricing metrics</h3>
+  <p>The product already prices on something close to the right value metric: <b>keyword checks performed</b> is what the customer actually gets more of as they pay more, and it's also the unit that drives the underlying vendor cost — a rare case where the current mechanism and a clean usage-based value metric already line up. <span class="tag strong">strong evidence</span></p>
+  <div class="table-wrap"><table><thead><tr><th>Candidate pricing metric</th><th>Currently used as a lever?</th><th>Notes</th></tr></thead><tbody>
+    <tr><td>Keyword checks / credits</td><td>Yes — primary</td><td>Already the core mechanism; well-instrumented (full ledger).</td></tr>
+    <tr><td>Check frequency (daily / weekly / etc.)</td><td>Indirectly</td><td>Shown to the user as a credit-consumption estimator; not an independent price lever today.</td></tr>
+    <tr><td>Keywords per topic / project caps</td><td>Yes, on free tier only</td><td>A structural (non-credit) gate — could become a paid-tier lever too, not just a free-tier limiter.</td></tr>
+    <tr><td>Seats / collaborators</td><td>No</td><td>Team members are currently free at any plan level — an unmonetized lever if collaboration is valuable to the target persona (agencies).</td></tr>
+    <tr><td>AI Overview tracking depth</td><td>No</td><td>Currently included uniformly; could become a premium toggle given its higher per-check cost (see below).</td></tr>
+    <tr><td>Data retention / history length</td><td>No explicit limit found</td><td>Common lever in the category; worth deciding deliberately rather than leaving unbounded.</td></tr>
+    <tr><td>Export/report automation (Sheets sync, scheduled email)</td><td>No</td><td>Currently bundled and partly unfinished; a natural mid-tier packaging lever once finished.</td></tr>
+  </tbody></table></div>
+
+  <h3>Variable cost drivers (high level, no infrastructure specifics)</h3>
+  <ul>
+    <li><b>Third-party SERP/search-data provider calls</b> — the dominant variable cost, scaling directly with checks performed. Vendor-side cost is tracked and visible for one provider integration but not the other, which is a real gap for accurate per-check margin calculation if the untracked provider is the one carrying most production volume. <span class="tag strong">strong evidence</span></li>
+    <li><b>AI Overview content reconstruction</b> — the heavier of the two check types in compute/parsing terms (raw page retrieval and parsing vs. a lighter structured response) — a plausible candidate for its own cost-aware pricing treatment rather than being bundled at the same "1 credit" price as a plain organic check.</li>
+    <li><b>Storage of raw check evidence</b> (compressed) — scales with check volume and retention window; currently no retention limit was found, so this cost grows unbounded over the customer base's lifetime unless addressed.</li>
+    <li><b>Export/report integrations</b> (e.g. Sheets sync) — comparatively low incremental cost per sync; not a meaningful margin risk today.</li>
+    <li><b>Payment/e-invoicing vendor fees</b> — scale with transaction volume/value, standard for the category, not flagged as a risk.</li>
+  </ul>
+
+  <h3>Where paywalls/upsells could sit</h3>
+  <p>Current placement (after first value, at the point of wanting more) is sound and worth preserving as the model evolves — don't move the paywall earlier than it already sits. Two under-used levers worth testing: pricing AI Overview tracking as a premium multiplier on credit cost (given its cost profile above) rather than bundling it uniformly; and introducing a seat/collaborator cap or paid-seat tier above a free threshold, since the primary persona (agencies) is the one most likely to value adding teammates and is currently getting that for free at every plan level.</p>
+
+  <h3>Packaging levers ranked by readiness</h3>
+  <ol>
+    <li><b>Keyword-check volume</b> — already a clean lever, well-instrumented, ready to use as-is.</li>
+    <li><b>Keywords-per-topic/project caps</b> — structurally ready; currently only applied to the free tier.</li>
+    <li><b>AI Overview tracking</b> — differentiated capability with a real cost delta; not yet priced separately.</li>
+    <li><b>Seats/collaborators</b> — unmonetized; needs product decision before it can be a lever.</li>
+    <li><b>Reporting automation (Sheets sync, email reports)</b> — needs finishing (§2, §4) before it can be sold as a reliable tier feature.</li>
+    <li><b>Affiliate program</b> — a growth lever, not a pricing lever, but currently undercut by unfinished payout UX (§4) — fix before leaning on it for CAC reduction.</li>
+  </ol>
+</section>
+
+<section id="direction">
+  <div class="eyebrow">Section 10</div>
+  <h2>Product Direction Assessment</h2>
+
+  <p><b>Strategy read:</b> product-led, self-serve at the core, with a light sales-assist layer bolted on only at the top (the "Custom/contact us" tier). Vertical and narrow by design — everything is organized around one object (a tracked project) and one metric (rank position, organic and AI Overview) rather than a broad SEO-suite ambition. Collaboration is single-resource-sharing-first, not team-workspace-first: the product is built for "share this specific project with these specific people," not "give my whole team a shared home." <span class="tag inferred">inferred, synthesized across sections</span></p>
+
+  <p><b>What the team is betting on:</b> that AI Overview visibility becomes a rankings category customers will pay to track with real depth (heaviest, most differentiated engineering investment in the codebase); that reducing agency manual labor (auto-clustering, auto-competitor-discovery, auto-sync reporting) is worth more than manual configurability; and that a low-friction migration path plus an affiliate program can drive acquisition more cheaply than paid marketing. The first bet looks well-executed; the second is mostly delivered; the third is architecturally sound but currently undercut by an unfinished affiliate payout experience — the exact part of that bet that determines whether a partner actually keeps referring.</p>
+
+  <p><b>What's half-built:</b> the reporting/audit layer around the core product (KPI goals, activity log, billing history, one of two Sheets export formats) and the affiliate payout loop are the two clearest patterns of unfinished work — both are secondary to the revenue-critical rank-checking-and-billing path, which is uniformly complete and well-instrumented by comparison. This is consistent with a small team sequencing "what makes money and what proves the core value" ahead of "what makes the experience feel fully finished."</p>
+
+  <p><b>Margin and growth implication:</b> the wow moment is real and fast, but not free — it's tied to metered third-party costs that are only partially visible internally (vendor cost tracked for one provider, not the other), which is worth closing before making aggressive pricing changes, since the team can't yet see its true per-check margin with full confidence. Revenue capture is currently geographically capped by a single-country payment rail despite USD pricing already existing in the UI — closing that gap is likely the single highest-leverage change available for growing revenue from demand the product is already generating internationally. Within the current market, the credit-metered model is a genuinely good fit for the value metric and gives real room to introduce new packaging levers (AI Overview as a premium multiplier, seats) without restructuring the whole pricing system.</p>
+</section>
+
+</main>
+</div>
+
+<footer>
+  <p>Prepared as a product-level, confidentiality-constrained analysis. No source code, file paths, class/function names, route strings, or database schema details are reproduced anywhere in this document. Environment/secret files, infrastructure/deployment configuration, database migrations, seed/fixture data, and internal security or incident documentation were excluded from this review. Where a claim could not be confirmed from the codebase, it is labeled <span class="tag inferred">inferred</span> rather than stated as fact.</p>
+</footer>

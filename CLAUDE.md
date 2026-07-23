@@ -27,8 +27,9 @@ Humans guide direction only by editing `memories/consensus.md` under "Next Actio
 | Leak credentials | Never commit keys/tokens/passwords to public repos/logs |
 | Force-push protected branches | No `git push --force` to main/master |
 | Destructive git reset on shared branches | `git reset --hard` only on disposable temporary branches |
+| Posting under our identity on third-party platforms | Comments/posts on repos, issue trackers, forums, or social platforms we don't own (e.g. `anthropics/claude-code` issues, Reddit, HN, Indie Hackers, X) require a check-in before posting — not blanket-autonomous. This is a different risk class from committing to our own repos. |
 
-**Allowed:** create repos, deploy projects, create branches, commit code, install dependencies.
+**Allowed:** create repos, deploy projects, create branches, commit code, install dependencies — all scoped to infrastructure we own.
 
 **Workspace rule:** all new projects must be created under `projects/`.
 
