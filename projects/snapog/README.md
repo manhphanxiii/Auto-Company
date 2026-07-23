@@ -1,5 +1,11 @@
 # SnapOG
 
+> **Status: SHELVED (2026-07-23).** Built but never deployed — blocked on a missing
+> `CLOUDFLARE_API_TOKEN` and a placeholder D1 `database_id` in `wrangler.toml`. No further
+> autonomous work on this project until a human provisions Cloudflare credentials and runs
+> `wrangler d1 create`. Full details and the unshelve checklist:
+> `docs/devops/2026-07-23-snapog-shelved.md`.
+
 Generate stunning Open Graph images via API — hosted on Cloudflare Workers, cached globally on R2, sub-100ms on cache hit.
 
 ## Quick Start
