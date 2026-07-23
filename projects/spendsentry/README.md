@@ -21,10 +21,20 @@ pricing table — not a substitute for your actual Anthropic invoice.
 
 ## Install
 
+Run it directly, no install step:
+
 ```bash
+npx github:manhphanxiii/spendsentry check --threshold 5 --window 24h
+```
+
+Want a bare `spendsentry` command instead of typing `npx` every time? Clone and link it:
+
+```bash
+git clone https://github.com/manhphanxiii/spendsentry.git
+cd spendsentry
 npm install
 npm run build
-npm link   # optional: makes `spendsentry` available globally
+npm link
 ```
 
 ## Usage
