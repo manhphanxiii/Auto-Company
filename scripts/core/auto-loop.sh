@@ -697,6 +697,8 @@ This is Cycle #$loop_count. Act decisively."
         cycle_failed_reason="Exit code $EXIT_CODE"
     elif ! validate_consensus; then
         cycle_failed_reason="consensus.md validation failed after cycle"
+    elif ! consensus_changed_since_backup; then
+        cycle_failed_reason="consensus.md was not updated this cycle (mandatory baton update missing)"
     fi
 
     if [ "$cycle_soft_timeout" -eq 1 ]; then
