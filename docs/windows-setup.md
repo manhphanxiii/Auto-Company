@@ -1,33 +1,33 @@
 # Windows + WSL Setup Guide
 
-本项目在 Windows 上采用：
+On Windows, this project uses:
 
-- Windows PowerShell 作为控制入口
-- WSL2 (Ubuntu + systemd) 作为执行内核
-- WSL `systemd --user` 提供守护与崩溃自拉起
-- Windows `scripts/windows/awake-guardian-win.ps1` 提供运行时防睡眠
-- Windows `scripts/windows/wsl-anchor-win.ps1` 提供 WSL 会话保活（防止空闲退出）
+- Windows PowerShell as the control entry point
+- WSL2 (Ubuntu + systemd) as the execution kernel
+- WSL `systemd --user` providing daemon supervision and crash auto-restart
+- Windows `scripts/windows/awake-guardian-win.ps1` providing runtime sleep-prevention
+- Windows `scripts/windows/wsl-anchor-win.ps1` providing WSL session keep-alive (preventing idle exit)
 
-## 1. 一次性安装（WSL 内）
+## 1. One-Time Install (inside WSL)
 
-在 Ubuntu 终端执行：
+Run in an Ubuntu terminal:
 
 ```bash
 sudo apt update
 sudo apt install -y make jq curl
 
-# 安装 Node.js（推荐 LTS）
+# Install Node.js (LTS recommended)
 curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
 sudo apt install -y nodejs
 
-# 安装 Claude Code（默认引擎）
+# Install Claude Code (the default engine)
 npm install -g @anthropic-ai/claude-code
 
-# 可选：安装 Codex CLI（用于 ENGINE=codex）
+# Optional: install the Codex CLI (for ENGINE=codex)
 npm install -g @openai/codex
 ```
 
-## 2. 一次性自检（WSL 内）
+## 2. One-Time Self-Check (inside WSL)
 
 ```bash
 make --version
@@ -38,11 +38,11 @@ systemctl --user --version
 ps -p 1 -o comm=
 ```
 
-判定标准：
-- `systemctl --user --version` 成功
-- `ps -p 1 -o comm=` 输出 `systemd`
+Pass criteria:
+- `systemctl --user --version` succeeds
+- `ps -p 1 -o comm=` outputs `systemd`
 
-建议额外检查引擎路径（至少检查你要使用的引擎）：
+Recommended additional check of the engine path (check at least the engine you plan to use):
 
 ```bash
 bash -lc 'command -v claude; claude --version'
@@ -51,21 +51,21 @@ bash -ic 'command -v claude; claude --version'
 bash -ic 'command -v codex; codex --version'
 ```
 
-应优先命中 WSL 本地路径（`/home/<user>/...`），避免 `/mnt/c/...`。
+It should preferably hit a local WSL path (`/home/<user>/...`), avoiding `/mnt/c/...`.
 
-建议一次性启用 linger（提高 user service 持续性）：
+Recommended one-time enabling of linger (improves user service persistence):
 
 ```powershell
 wsl -d Ubuntu -u root loginctl enable-linger <your-user>
 ```
 
-## 3. 前置事项（每次开始前）
+## 3. Prerequisites (before every session)
 
-1. WSL 内 `make`、`claude`、`jq`、`systemctl --user` 可用（如需 codex，再确认 `codex`）。
-2. 目标引擎在 WSL 内已登录且可用（默认 `claude`）。
-3. 建议确认目标引擎路径优先是 WSL 本地路径（`/home/...`）。
+1. `make`, `claude`, `jq`, and `systemctl --user` are available in WSL (if you need codex, also confirm `codex`).
+2. The target engine is logged in and usable inside WSL (default `claude`).
+3. Recommended: confirm the target engine's path is preferably a local WSL path (`/home/...`).
 
-可选快速检查（PowerShell）：
+Optional quick check (PowerShell):
 
 ```powershell
 wsl -d Ubuntu bash -lc 'make --version; claude --version; jq --version; systemctl --user --version'
@@ -74,15 +74,15 @@ wsl -d Ubuntu bash -lc 'command -v claude'
 wsl -d Ubuntu bash -lc 'codex --version; command -v codex'
 ```
 
-## 4. 推荐操作（标准）
+## 4. Recommended Operation (standard)
 
-在仓库根目录运行：
+Run from the repo root:
 
 ```powershell
-# 默认 Claude
+# Default: Claude
 .\scripts\windows\start-win.ps1 -Engine claude -ClaudePermissionMode bypassPermissions -CycleTimeoutSeconds 1800 -LoopInterval 30
 
-# 切换 Codex
+# Switch to Codex
 .\scripts\windows\start-win.ps1 -Engine codex -SandboxMode workspace-write -CycleTimeoutSeconds 1800 -LoopInterval 30
 
 .\scripts\windows\status-win.ps1
@@ -93,104 +93,104 @@ wsl -d Ubuntu bash -lc 'codex --version; command -v codex'
 .\scripts\windows\dashboard-win.ps1
 ```
 
-说明：
-- `.\scripts\windows\start-win.ps1` 会写入 `.auto-loop.env`，并启动 `auto-company.service` + `awake guardian` + `wsl anchor`
-- `.\scripts\windows\stop-win.ps1` 会停止 `auto-company.service` 并关闭 `awake guardian` + `wsl anchor`
-- `.\scripts\windows\dashboard-win.ps1` 会启动本地 Web 看板（默认 `http://127.0.0.1:8787`）
+Notes:
+- `.\scripts\windows\start-win.ps1` writes `.auto-loop.env` and starts `auto-company.service` + the `awake guardian` + the `wsl anchor`
+- `.\scripts\windows\stop-win.ps1` stops `auto-company.service` and shuts down the `awake guardian` + the `wsl anchor`
+- `.\scripts\windows\dashboard-win.ps1` starts the local web dashboard (default `http://127.0.0.1:8787`)
 
-推荐参数：
-- `CycleTimeoutSeconds`：`900-1800`
-- `LoopInterval`：`30-60`
-- `Engine`：`claude`（默认）或 `codex`
-- `SandboxMode`：仅在 `ENGINE=codex` 时生效（兼容旧参数 `CodexSandboxMode`）
-- `ClaudePermissionMode`：默认 `bypassPermissions`
+Recommended parameters:
+- `CycleTimeoutSeconds`: `900-1800`
+- `LoopInterval`: `30-60`
+- `Engine`: `claude` (default) or `codex`
+- `SandboxMode`: only takes effect when `ENGINE=codex` (backward-compatible with the old `CodexSandboxMode` parameter)
+- `ClaudePermissionMode`: defaults to `bypassPermissions`
 
-脚本定位说明：
-- 所有脚本实现位于 `scripts/windows/`、`scripts/core/`、`scripts/wsl/`、`scripts/macos/`
-- 日常执行入口也统一使用 `scripts/` 下脚本
-- 如需维护逻辑，请直接修改 `scripts/` 下对应实现文件
+Script location notes:
+- All script implementations live under `scripts/windows/`, `scripts/core/`, `scripts/wsl/`, `scripts/macos/`
+- Day-to-day execution also uses the scripts under `scripts/` uniformly
+- If you need to change the maintenance logic, edit the corresponding implementation file under `scripts/` directly
 
-## 5. 可选：登录后自启
+## 5. Optional: Start on Logon
 
-默认不启用。需要时执行：
+Disabled by default. Enable it when needed:
 
 ```powershell
 .\scripts\windows\enable-autostart-win.ps1
 .\scripts\windows\autostart-status-win.ps1
 ```
 
-关闭：
+Disable it:
 
 ```powershell
 .\scripts\windows\disable-autostart-win.ps1
 ```
 
-自启任务名：`AutoCompany-WSL-Start`（触发器：At logon）。
-若提示 `Access is denied`，请使用管理员 PowerShell 重新执行。
+Autostart task name: `AutoCompany-WSL-Start` (trigger: At logon).
+If you see `Access is denied`, re-run it from an administrator PowerShell.
 
-## 6. Chat-first 模式（和 Claude/Codex 对话）
+## 6. Chat-First Mode (conversing with Claude/Codex)
 
-如果你不想手动执行命令，可直接在 Windows 里和 Claude/Codex 对话，让它代你操作。
+If you don't want to run commands manually, you can just chat with Claude/Codex in Windows and have it operate on your behalf.
 
-底层链路：
+Underlying call chain:
 
 `scripts/windows/start-win.ps1` -> WSL `systemd --user` -> `scripts/core/auto-loop.sh`
 
-与手动命令的核心行为一致，差异只在入口方式。
+The core behavior is identical to the manual commands — the only difference is the entry point.
 
-## 7. 常见问题
+## 7. Common Issues
 
 ### `bad interpreter: /bin/bash^M`
 
-- 原因：文件是 CRLF
-- 处理：
+- Cause: the file is CRLF
+- Fix:
 
 ```bash
 git config core.autocrlf false
 git config core.eol lf
 ```
 
-### `claude`/`codex` 命令不存在（或 node not found）
+### `claude`/`codex` command not found (or node not found)
 
-- 原因：WSL 中缺 Node 或缺目标引擎 CLI
-- 处理：回到第 1 步重新安装
+- Cause: WSL is missing Node or the target engine's CLI
+- Fix: go back to step 1 and reinstall
 
-### Claude 运行时卡在权限确认
+### Claude gets stuck on a permission confirmation at runtime
 
-- 原因：`CLAUDE_PERMISSION_MODE` 设置过严，导致非交互流程被阻塞
-- 处理：启动时显式传 `-ClaudePermissionMode bypassPermissions`
-- 排查：查看 `logs/auto-loop.log` 中 `Engine: claude | ... | PermissionMode: ...`
+- Cause: `CLAUDE_PERMISSION_MODE` is set too strictly, blocking the non-interactive flow
+- Fix: explicitly pass `-ClaudePermissionMode bypassPermissions` at startup
+- Diagnose: check `logs/auto-loop.log` for `Engine: claude | ... | PermissionMode: ...`
 
-### `systemctl --user` 不可用
+### `systemctl --user` is unavailable
 
-- 原因：WSL 未启用 systemd 或会话未正确初始化
-- 处理：
-  - 先确认 `ps -p 1 -o comm=` 是 `systemd`
-  - 再验证 `systemctl --user --version`
-  - 必要时重开 WSL 会话后重试
+- Cause: WSL doesn't have systemd enabled, or the session wasn't initialized correctly
+- Fix:
+  - First confirm `ps -p 1 -o comm=` is `systemd`
+  - Then verify `systemctl --user --version`
+  - If necessary, restart the WSL session and try again
 
-### 日志显示 Engine bin 在 `/mnt/c/...`
+### The log shows the engine binary at `/mnt/c/...`
 
-- 原因：PATH 先命中 Windows 侧 CLI
-- 影响：版本和行为可能与 WSL 本地终端不一致
-- 处理：在 WSL 内安装并优先使用本地 CLI（`/home/<user>/...`）
+- Cause: PATH is hitting the Windows-side CLI first
+- Impact: the version and behavior may not match the local WSL terminal
+- Fix: install and prioritize the local CLI inside WSL (`/home/<user>/...`)
 
-### guardian 启动失败
+### The guardian fails to start
 
-- 现象：`scripts/windows/start-win.ps1` 提示 daemon 已启动，但 guardian 启动失败并返回非零
-- 处理：先执行 `.\scripts\windows\status-win.ps1` 确认服务状态，再手动执行 `.\scripts\windows\awake-guardian-win.ps1 -Action start`
+- Symptom: `scripts/windows/start-win.ps1` reports the daemon started, but the guardian failed to start and returned a non-zero exit code
+- Fix: first run `.\scripts\windows\status-win.ps1` to confirm service status, then manually run `.\scripts\windows\awake-guardian-win.ps1 -Action start`
 
-### 频繁出现 `Cycle #1 START` 且伴随 `Auto Loop Shutting Down`
+### Frequent `Cycle #1 START` accompanied by `Auto Loop Shutting Down`
 
-- 原因：WSL 会话被回收（常见于 linger 未开启或缺少 keepalive）
-- 处理：
-  - 确认 `wsl-anchor` 为 RUNNING：`.\scripts\windows\status-win.ps1`
-  - 一次性启用 linger：`wsl -d Ubuntu -u root loginctl enable-linger <your-user>`
-  - 重启服务：`.\scripts\windows\stop-win.ps1` 然后 `.\scripts\windows\start-win.ps1`
+- Cause: the WSL session was reclaimed (common when linger isn't enabled or keepalive is missing)
+- Fix:
+  - Confirm `wsl-anchor` is RUNNING: `.\scripts\windows\status-win.ps1`
+  - Enable linger once: `wsl -d Ubuntu -u root loginctl enable-linger <your-user>`
+  - Restart the service: `.\scripts\windows\stop-win.ps1` then `.\scripts\windows\start-win.ps1`
 
-### 自启脚本提示 `Access is denied`
+### The autostart script reports `Access is denied`
 
-- 原因：当前 PowerShell 权限不足以写入计划任务
-- 处理：使用管理员 PowerShell 执行：
+- Cause: the current PowerShell session doesn't have enough permission to write the scheduled task
+- Fix: run from an administrator PowerShell:
   - `.\scripts\windows\enable-autostart-win.ps1`
   - `.\scripts\windows\disable-autostart-win.ps1`

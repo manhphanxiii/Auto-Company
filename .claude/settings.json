@@ -1,12 +1,21 @@
 {
-  "permissions": {
-    "defaultMode": "bypassPermissions",
-    "allow": ["WebSearch", "Bash", "Edit", "Write", "WebFetch", "NotebookEdit", "Skill"],
-    "ask": [],
-    "deny": []
-  },
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash",
+      "Edit",
+      "Write",
+      "WebFetch",
+      "NotebookEdit",
+      "Skill",
+      "Bash(make start *)"
+    ],
+    "deny": [],
+    "ask": [],
+    "defaultMode": "bypassPermissions"
   },
   "enableAllProjectMcpServers": true
 }
