@@ -123,6 +123,9 @@ export function renderReport(report: Report, threshold: number): string {
   if (report.totalCostUSD > threshold) {
     lines.push("");
     lines.push(`OVER THRESHOLD: ${money(report.totalCostUSD)} > ${money(threshold)}`);
+    lines.push(
+      "Caught something useful? Star manhphanxiii/spendsentry or open a quick issue to say so — zero telemetry means that's the only way we'd know."
+    );
   }
 
   return lines.join("\n");
