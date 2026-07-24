@@ -106,6 +106,8 @@ CLAUDE_WATCH_MAX_DURATION="${CLAUDE_WATCH_MAX_DURATION:-$CYCLE_TIMEOUT_SECONDS}"
 CLAUDE_WATCH_GRACE_PERIOD="${CLAUDE_WATCH_GRACE_PERIOD:-10}"
 CLAUDE_WATCH_WEBHOOK="${CLAUDE_WATCH_WEBHOOK:-}"
 CLAUDE_WATCH_AUTO_DISABLE_THRESHOLD="${CLAUDE_WATCH_AUTO_DISABLE_THRESHOLD:-3}"
+CLAUDE_WATCH_ROLLING_WINDOW_SIZE="${CLAUDE_WATCH_ROLLING_WINDOW_SIZE:-$((CLAUDE_WATCH_AUTO_DISABLE_THRESHOLD * 2))}"
+CLAUDE_WATCH_ROLLING_WINDOW_THRESHOLD="${CLAUDE_WATCH_ROLLING_WINDOW_THRESHOLD:-$CLAUDE_WATCH_AUTO_DISABLE_THRESHOLD}"
 RESOLVED_ENGINE_BIN=""
 RESOLVED_CLAUDE_WATCH_BIN=""
 CLAUDE_WATCH_ACTIVE=0
@@ -475,8 +477,50 @@ resolve_claude_watch_bin() {
 # not a substitute for the existing timeout logic. Safe to call on an
 # already-empty group: never errors, never hangs, never touches PID/PGID 0 or
 # 1 (which would reach far more than the intended group).
+# Re-verifies, immediately before a SIGKILL, that the surviving process group
+# still looks like the invocation we launched -- guards against pgid reuse:
+# on a long-running daemon, a pgid retired by the OS between our `wait` and
+# this final check can be reassigned to a completely unrelated process by
+# the time we get here. Matches on EITHER (a) any process in the group whose
+# command line contains expected_pattern, or (b) the group leader (pid ==
+# pgid) still being a direct child of this script ($$) -- see the Item 1
+# design doc (docs/devops/2026-07-24-cycle28-hardening-design.md) for why
+# both checks exist and why a non-matching orphaned descendant with an
+# already-reparented ppid is an accepted, documented gap rather than a bug:
+# ancestry back to $$ is unrecoverable at the OS level once a parent has
+# died and the child has been reparented, so no check can close it. Fails
+# safe on any ambiguity (ps missing/empty/unparseable, or no match at all):
+# skip the KILL rather than signal an unverified target.
+pgid_matches_expected() {
+    local pgid="$1"
+    local pattern="$2"
+    local self_pid="$3"
+    local rows
+
+    rows=$(ps -eo pid=,ppid=,pgid=,command= 2>/dev/null | awk -v pg="$pgid" '$3 == pg')
+
+    if [ -z "$rows" ]; then
+        return 1
+    fi
+    if [ -z "$pattern" ]; then
+        return 1
+    fi
+
+    if printf '%s\n' "$rows" | grep -F -q -- "$pattern"; then
+        return 0
+    fi
+
+    if printf '%s\n' "$rows" | awk -v p="$pgid" -v s="$self_pid" \
+        '$1 == p && $2 == s { f=1 } END { exit !f }'; then
+        return 0
+    fi
+
+    return 1
+}
+
 terminate_process_group() {
     local pgid="$1"
+    local expected_pattern="$2"
 
     if [ -z "$pgid" ] || [ "$pgid" -le 1 ] 2>/dev/null; then
         return 0
@@ -486,7 +530,11 @@ terminate_process_group() {
         kill -TERM -- "-$pgid" 2>/dev/null || true
         sleep 5
         if kill -0 -- "-$pgid" 2>/dev/null; then
-            kill -KILL -- "-$pgid" 2>/dev/null || true
+            if pgid_matches_expected "$pgid" "$expected_pattern" "$$"; then
+                kill -KILL -- "-$pgid" 2>/dev/null || true
+            else
+                log "terminate_process_group: pgid $pgid survived SIGTERM but no longer verifiably matches expected invocation (pattern '$expected_pattern'); possible pgid reuse -- skipping SIGKILL to avoid signaling an unrelated process."
+            fi
         fi
     fi
 }
@@ -538,7 +586,7 @@ run_codex_cycle() {
     # watchdog timeout, or any other exit) — sweep the whole process group
     # before reading the output files so no orphaned descendant is left
     # running, or still writing to output_file, invisibly.
-    terminate_process_group "$codex_pgid"
+    terminate_process_group "$codex_pgid" "codex"
 
     OUTPUT=$(cat "$output_file")
     RESULT_MESSAGE=$(cat "$message_file" 2>/dev/null || true)
@@ -621,7 +669,7 @@ run_claude_cycle_legacy() {
     # is left running, or still writing to output_file, invisibly. This is
     # prerequisite #1 from the blocking-prerequisites review: closes the
     # orphaned-descendant gap that a plain `kill $claude_pid` leaves open.
-    terminate_process_group "$claude_pgid"
+    terminate_process_group "$claude_pgid" "claude"
 
     OUTPUT=$(cat "$output_file")
     RESULT_MESSAGE="$OUTPUT"
@@ -730,7 +778,7 @@ run_claude_cycle_watched() {
     # the output file so no orphaned descendant is left running, or still
     # holding output_file's fd open. This is prerequisite #1 from the
     # blocking-prerequisites review, applied to the watched path.
-    terminate_process_group "$watch_pgid"
+    terminate_process_group "$watch_pgid" "claude"
 
     OUTPUT=$(cat "$output_file")
     RESULT_MESSAGE="$OUTPUT"
@@ -961,6 +1009,8 @@ trap cleanup SIGTERM SIGINT SIGHUP
 loop_count=0
 error_count=0
 claude_watch_consecutive_timeouts=0
+claude_watch_rolling_history=()
+claude_watch_rolling_failures=0
 
 log "=== Auto Company Loop Started (PID $$) ==="
 log "Project: $PROJECT_DIR"
@@ -1062,14 +1112,36 @@ This is Cycle #$loop_count. Act decisively."
     # automatic, in-memory, and same-process — same pattern as error_count
     # below.
     if [ "$cycle_used_claude_watch" -eq 1 ]; then
+        # --- Rolling window (belt-and-suspenders addition, cycle 28): tracks
+        # the last CLAUDE_WATCH_ROLLING_WINDOW_SIZE claude-watch-active cycles
+        # as a 0/1 ring buffer and counts failures in-window, independent of
+        # whether they were consecutive. Catches flapping patterns
+        # (fail/succeed/fail/succeed/...) that never accumulate N-in-a-row
+        # and would otherwise never trip the consecutive check below. See
+        # docs/devops/2026-07-24-cycle28-hardening-design.md for default
+        # justification (M/N derived from CLAUDE_WATCH_AUTO_DISABLE_THRESHOLD).
+        claude_watch_rolling_history+=("$CLAUDE_WATCH_ATTRIBUTABLE_FAILURE")
+        claude_watch_rolling_failures=$((claude_watch_rolling_failures + CLAUDE_WATCH_ATTRIBUTABLE_FAILURE))
+        if [ "${#claude_watch_rolling_history[@]}" -gt "$CLAUDE_WATCH_ROLLING_WINDOW_SIZE" ]; then
+            evicted_bit="${claude_watch_rolling_history[0]}"
+            claude_watch_rolling_history=("${claude_watch_rolling_history[@]:1}")
+            claude_watch_rolling_failures=$((claude_watch_rolling_failures - evicted_bit))
+        fi
+
+        # --- Strictly-consecutive check (unchanged from cycle 27) ---
         if [ "$CLAUDE_WATCH_ATTRIBUTABLE_FAILURE" -eq 1 ]; then
             claude_watch_consecutive_timeouts=$((claude_watch_consecutive_timeouts + 1))
-            if [ "$claude_watch_consecutive_timeouts" -ge "$CLAUDE_WATCH_AUTO_DISABLE_THRESHOLD" ] && [ "$CLAUDE_WATCH_ACTIVE" -eq 1 ]; then
-                CLAUDE_WATCH_ACTIVE=0
-                log_cycle "$loop_count" "GUARD" "Auto-disabled claude-watch after $claude_watch_consecutive_timeouts consecutive claude-watch-attributable failures (idle-timeout/max-duration/permission-denial/false-completion/backstop); falling back to legacy watchdog for the remainder of this run. (AUTO_LOOP_USE_CLAUDE_WATCH left unchanged for logging; only the runtime CLAUDE_WATCH_ACTIVE gate was flipped.)"
-            fi
         else
             claude_watch_consecutive_timeouts=0
+        fi
+
+        # --- Trip: either mechanism can independently auto-disable ---
+        if [ "$CLAUDE_WATCH_ACTIVE" -eq 1 ] && [ "$claude_watch_consecutive_timeouts" -ge "$CLAUDE_WATCH_AUTO_DISABLE_THRESHOLD" ]; then
+            CLAUDE_WATCH_ACTIVE=0
+            log_cycle "$loop_count" "GUARD" "Auto-disabled claude-watch after $claude_watch_consecutive_timeouts consecutive claude-watch-attributable failures (idle-timeout/max-duration/permission-denial/false-completion/backstop); falling back to legacy watchdog for the remainder of this run. (AUTO_LOOP_USE_CLAUDE_WATCH left unchanged for logging; only the runtime CLAUDE_WATCH_ACTIVE gate was flipped.)"
+        elif [ "$CLAUDE_WATCH_ACTIVE" -eq 1 ] && [ "$claude_watch_rolling_failures" -ge "$CLAUDE_WATCH_ROLLING_WINDOW_THRESHOLD" ]; then
+            CLAUDE_WATCH_ACTIVE=0
+            log_cycle "$loop_count" "GUARD" "Auto-disabled claude-watch after $claude_watch_rolling_failures claude-watch-attributable failures in the last ${#claude_watch_rolling_history[@]} claude-watch-active cycles (rolling-window threshold ${CLAUDE_WATCH_ROLLING_WINDOW_THRESHOLD}/${CLAUDE_WATCH_ROLLING_WINDOW_SIZE}, non-consecutive flapping pattern); falling back to legacy watchdog for the remainder of this run. (AUTO_LOOP_USE_CLAUDE_WATCH left unchanged for logging; only the runtime CLAUDE_WATCH_ACTIVE gate was flipped.)"
         fi
     fi
 
