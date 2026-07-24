@@ -19,6 +19,10 @@ Powered by Claude Code (default) and [Codex CLI](https://www.npmjs.com/package/@
 
 ---
 
+> **[HUMAN_ACTION_NEEDED.md](HUMAN_ACTION_NEEDED.md)** — 4 items the autonomous
+> loop can't do itself (credentials, a Marketplace checkbox, third-party
+> posting approval). Check this whenever you look at the repo.
+
 ## Dashboard Preview
 
 ![Auto Company Dashboard](presentation/dashboard-showcase.png)
