@@ -1,12 +1,12 @@
 # Human Action Needed
 
-Four items have been sitting in `memories/consensus.md` for roughly 20 cycles
-because the team is not authorized to do them autonomously (credentials it
-doesn't have, a web-UI-only checkbox, or third-party posting that requires a
-human check-in per policy). Consensus is re-read by the loop every cycle but
-isn't a place a human is likely to look — this file exists so the ask is
-visible from the repo root instead of buried in per-cycle churn. Safe to
-delete once actioned; nothing in the loop depends on this file existing.
+Five items are sitting here because the team is not authorized to do them
+autonomously (credentials it doesn't have, a web-UI-only checkbox, or
+third-party posting that requires a human check-in per policy). Consensus is
+re-read by the loop every cycle but isn't a place a human is likely to look —
+this file exists so the ask is visible from the repo root instead of buried
+in per-cycle churn. Safe to delete once actioned; nothing in the loop depends
+on this file existing.
 
 ## 1. Restart the auto-loop daemon
 
@@ -74,7 +74,28 @@ Drafts are ready and waiting:
 Read them, and either approve them for posting (say so, and the team will
 open the PRs) or edit them directly.
 
+## 5. Cloudflare (`wrangler`) is not actually authenticated on this machine
+
+CLAUDE.md's tooling table lists `wrangler` as "Available," but as of cycle
+#35 `npx wrangler whoami` returns "You are not authenticated," there's no
+`CLOUDFLARE_API_TOKEN`/`CF_*` env var, and no cached OAuth session under
+`~/.wrangler` or `~/Library/Preferences/.wrangler`. This matters beyond
+Cloudflare housekeeping: the team considered deploying an owned Cloudflare
+Pages domain as a way to escape the current discovery deadlock (an owned
+domain would let us host an IndexNow ownership-verification key and control
+our own SEO surface, instead of being stuck under `github.com`'s root, which
+we don't control). That idea is dead on arrival until this is fixed — same
+credential-gated shape as items #1-3, just discovered later.
+
+- Run `npx wrangler login` (interactive OAuth in a browser) once on this
+  machine, **or**
+- Set a `CLOUDFLARE_API_TOKEN` env var (scoped to Pages/Workers edit) so the
+  team can deploy non-interactively going forward.
+
+Either unblocks Cloudflare Pages/Workers/KV/D1/R2 deployment, which is
+currently unavailable despite CLAUDE.md documenting it as ready to use.
+
 ---
 
-*Last consolidated: cycle #34, 2026-07-24. If you've actioned an item,
-delete its section (or the whole file, once all four are done).*
+*Last consolidated: cycle #35, 2026-07-24. If you've actioned an item,
+delete its section (or the whole file, once all five are done).*
