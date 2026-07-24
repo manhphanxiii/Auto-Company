@@ -29,7 +29,10 @@
 #   LIMIT_WAIT_SECONDS=3600     # Wait on usage limit
 #   MAX_LOGS=200                # Max cycle logs to keep
 #   AUTO_LOOP_PROTECT_GITIGNORE=1
-#                               # Restore .gitignore if a cycle mutates it
+#                               # Revert .gitignore to its last-committed (HEAD) content if a
+#                               # cycle leaves it uncommitted-dirty. Compares against HEAD, not a
+#                               # pre-cycle snapshot, so a cycle that legitimately edits AND
+#                               # commits .gitignore is left alone.
 #   AUTO_LOOP_USE_CLAUDE_WATCH=0
 #                               # Feature flag (default OFF): wrap ENGINE=claude cycles with the
 #                               # claude-watch reliability supervisor (idle-timeout + max-duration)
@@ -187,54 +190,47 @@ cleanup() {
     exit 0
 }
 
-snapshot_gitignore() {
-    if [ "$AUTO_LOOP_PROTECT_GITIGNORE" = "0" ]; then
-        echo ""
-        return
-    fi
-
-    local gitignore_file="$PROJECT_DIR/.gitignore"
-    local snapshot_file=""
-    if [ -f "$gitignore_file" ]; then
-        snapshot_file=$(mktemp)
-        cp "$gitignore_file" "$snapshot_file"
-    fi
-    echo "$snapshot_file"
-}
-
 restore_gitignore_if_changed() {
-    local snapshot_file="$1"
+    # Drift protection only, not a security boundary: this catches an
+    # uncommitted working-tree mutation left dangling at end of cycle. It
+    # does NOT inspect commit content, so a cycle that commits a weakened
+    # .gitignore (e.g. un-ignoring a credentials file) is not caught here.
     if [ "$AUTO_LOOP_PROTECT_GITIGNORE" = "0" ]; then
-        [ -n "$snapshot_file" ] && rm -f "$snapshot_file"
         return
     fi
 
     local gitignore_file="$PROJECT_DIR/.gitignore"
-    local changed=0
+    local head_snapshot
+    head_snapshot=$(mktemp)
+    local head_has_file=1
+    if ! git -C "$PROJECT_DIR" show HEAD:.gitignore > "$head_snapshot" 2>/dev/null; then
+        head_has_file=0
+    fi
 
+    local changed=0
     if [ -f "$gitignore_file" ]; then
-        if [ -z "$snapshot_file" ] || [ ! -f "$snapshot_file" ]; then
+        if [ "$head_has_file" -eq 0 ]; then
             changed=1
-        elif ! cmp -s "$gitignore_file" "$snapshot_file"; then
+        elif ! cmp -s "$gitignore_file" "$head_snapshot"; then
             changed=1
         fi
     else
-        if [ -n "$snapshot_file" ] && [ -f "$snapshot_file" ]; then
+        if [ "$head_has_file" -eq 1 ]; then
             changed=1
         fi
     fi
 
     if [ "$changed" -eq 1 ]; then
-        if [ -n "$snapshot_file" ] && [ -f "$snapshot_file" ]; then
-            cp "$snapshot_file" "$gitignore_file"
-            log_cycle "$loop_count" "GUARD" "Blocked cycle mutation of .gitignore and restored baseline"
+        if [ "$head_has_file" -eq 1 ]; then
+            cp "$head_snapshot" "$gitignore_file"
+            log_cycle "$loop_count" "GUARD" "Reverted uncommitted .gitignore drift to last-committed (HEAD) version"
         else
             rm -f "$gitignore_file"
-            log_cycle "$loop_count" "GUARD" "Blocked cycle-created .gitignore and removed it"
+            log_cycle "$loop_count" "GUARD" "Blocked cycle-created .gitignore and removed it (no committed version exists)"
         fi
     fi
 
-    [ -n "$snapshot_file" ] && rm -f "$snapshot_file"
+    rm -f "$head_snapshot"
 }
 
 get_file_size_bytes() {
@@ -1139,7 +1135,6 @@ while true; do
 
     # Backup consensus before cycle
     backup_consensus
-    gitignore_snapshot=$(snapshot_gitignore)
 
     # Build prompt with consensus pre-injected
     PROMPT=$(cat "$PROMPT_FILE")
@@ -1217,7 +1212,7 @@ This is Cycle #$loop_count. Act decisively."
 
     # Clean up known malformed-redirection artifacts created by bad generated shell commands.
     cleanup_accidental_root_artifacts
-    restore_gitignore_if_changed "$gitignore_snapshot"
+    restore_gitignore_if_changed
 
     # Extract result fields for status classification
     extract_cycle_metadata

@@ -5,6 +5,9 @@
 #   - rolling_window_record()          (claude-watch flapping kill-switch)
 #   - claude_watch_trial_signoff_valid() (governance gate for the claude-watch
 #     dogfood trial -- cycle #30)
+#   - restore_gitignore_if_changed()   (.gitignore drift guard -- cycle #31 fix:
+#     compares against HEAD instead of a pre-cycle snapshot, so a cycle that
+#     legitimately edits AND commits .gitignore is no longer reverted)
 #
 # Dependency-free, bash 3.2 compatible (macOS default /bin/bash). Does NOT
 # source auto-loop.sh directly -- that file runs `set -euo pipefail`/`set -m`
@@ -44,6 +47,7 @@ fi
 pgid_matches_expected_src=$(awk '/^pgid_matches_expected\(\) \{/,/^\}/' "$TARGET")
 rolling_window_record_src=$(awk '/^rolling_window_record\(\) \{/,/^\}/' "$TARGET")
 claude_watch_trial_signoff_valid_src=$(awk '/^claude_watch_trial_signoff_valid\(\) \{/,/^\}/' "$TARGET")
+restore_gitignore_if_changed_src=$(awk '/^restore_gitignore_if_changed\(\) \{/,/^\}/' "$TARGET")
 
 if [ -z "$pgid_matches_expected_src" ]; then
     echo "Bail out! could not extract pgid_matches_expected() from $TARGET"
@@ -55,6 +59,10 @@ if [ -z "$rolling_window_record_src" ]; then
 fi
 if [ -z "$claude_watch_trial_signoff_valid_src" ]; then
     echo "Bail out! could not extract claude_watch_trial_signoff_valid() from $TARGET"
+    exit 1
+fi
+if [ -z "$restore_gitignore_if_changed_src" ]; then
+    echo "Bail out! could not extract restore_gitignore_if_changed() from $TARGET"
     exit 1
 fi
 
@@ -75,10 +83,12 @@ assert_single_function_extracted() {
 assert_single_function_extracted "pgid_matches_expected" "$pgid_matches_expected_src"
 assert_single_function_extracted "rolling_window_record" "$rolling_window_record_src"
 assert_single_function_extracted "claude_watch_trial_signoff_valid" "$claude_watch_trial_signoff_valid_src"
+assert_single_function_extracted "restore_gitignore_if_changed" "$restore_gitignore_if_changed_src"
 
 eval "$pgid_matches_expected_src"
 eval "$rolling_window_record_src"
 eval "$claude_watch_trial_signoff_valid_src"
+eval "$restore_gitignore_if_changed_src"
 
 if ! type pgid_matches_expected >/dev/null 2>&1; then
     echo "Bail out! eval of extracted pgid_matches_expected() did not define the function"
@@ -92,13 +102,21 @@ if ! type claude_watch_trial_signoff_valid >/dev/null 2>&1; then
     echo "Bail out! eval of extracted claude_watch_trial_signoff_valid() did not define the function"
     exit 1
 fi
+if ! type restore_gitignore_if_changed >/dev/null 2>&1; then
+    echo "Bail out! eval of extracted restore_gitignore_if_changed() did not define the function"
+    exit 1
+fi
 
 # claude_watch_trial_signoff_valid() calls log(...) and references $PROJECT_DIR
 # and $SCRIPT_DIR as globals (matching how it's actually called in the real
 # script -- not parameters). Stub log() and point those globals at an isolated
 # scratch git repo below so these tests never read or mutate the real repo's
-# git index/working tree.
+# git index/working tree. restore_gitignore_if_changed() calls log_cycle(...)
+# and references $PROJECT_DIR/$loop_count/$AUTO_LOOP_PROTECT_GITIGNORE as
+# globals the same way -- stub/set those too.
 log() { :; }
+log_cycle() { :; }
+loop_count=1
 
 # =====================================================================
 # pgid_matches_expected(pgid, pattern, self_pid) tests
@@ -399,6 +417,78 @@ fi
 
 rm -f "$SIGNOFF_MARKER"
 rm -rf "$SIGNOFF_TEST_DIR"
+trap - EXIT
+
+# =====================================================================
+# restore_gitignore_if_changed() tests
+# =====================================================================
+#
+# Regression coverage for the cycle-31 fix: the guard used to snapshot
+# .gitignore at the START of a cycle and restore that pre-cycle snapshot at
+# the end, which silently reverted the working tree even when the cycle
+# itself legitimately edited AND committed a .gitignore change -- explaining
+# a real recurring drift bug seen across many prior cycles. The fix compares
+# against the committed HEAD content instead. Uses an isolated scratch git
+# repo, never the real project repo.
+
+GITIGNORE_TEST_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t gitignore_test)"
+trap 'rm -rf "$GITIGNORE_TEST_DIR"' EXIT
+git -C "$GITIGNORE_TEST_DIR" init -q
+git -C "$GITIGNORE_TEST_DIR" config user.email "test@example.com"
+git -C "$GITIGNORE_TEST_DIR" config user.name "Test"
+
+PROJECT_DIR="$GITIGNORE_TEST_DIR"
+AUTO_LOOP_PROTECT_GITIGNORE=1
+GITIGNORE_FILE="$GITIGNORE_TEST_DIR/.gitignore"
+
+# --- Case 1: cycle legitimately edits AND commits .gitignore -> left alone ---
+printf 'node_modules\n' > "$GITIGNORE_FILE"
+git -C "$GITIGNORE_TEST_DIR" add .gitignore
+git -C "$GITIGNORE_TEST_DIR" commit -q -m "baseline .gitignore"
+printf 'node_modules\ndist\n' > "$GITIGNORE_FILE"
+git -C "$GITIGNORE_TEST_DIR" add .gitignore
+git -C "$GITIGNORE_TEST_DIR" commit -q -m "cycle commits a legitimate .gitignore change"
+restore_gitignore_if_changed
+if diff -q "$GITIGNORE_FILE" <(printf 'node_modules\ndist\n') >/dev/null 2>&1; then
+    ok "restore_gitignore_if_changed: cycle commits a legitimate change -> not reverted"
+else
+    not_ok "restore_gitignore_if_changed: cycle commits a legitimate change -> not reverted (BUG: committed change was clobbered)"
+fi
+
+# --- Case 2: cycle leaves .gitignore uncommitted-dirty -> reverted to HEAD ---
+printf 'node_modules\ndist\nSTRAY_UNCOMMITTED_LINE\n' > "$GITIGNORE_FILE"
+restore_gitignore_if_changed
+if diff -q "$GITIGNORE_FILE" <(printf 'node_modules\ndist\n') >/dev/null 2>&1; then
+    ok "restore_gitignore_if_changed: uncommitted stray edit -> reverted to last-committed HEAD version"
+else
+    not_ok "restore_gitignore_if_changed: uncommitted stray edit -> reverted to last-committed HEAD version"
+fi
+
+# --- Case 3: cycle creates a brand-new .gitignore with no committed history -> removed ---
+git -C "$GITIGNORE_TEST_DIR" rm -q --cached .gitignore
+rm -f "$GITIGNORE_FILE"
+git -C "$GITIGNORE_TEST_DIR" commit -q -m "remove .gitignore from history entirely"
+printf 'SOME_NEW_UNCOMMITTED_IGNORE\n' > "$GITIGNORE_FILE"
+restore_gitignore_if_changed
+if [ ! -f "$GITIGNORE_FILE" ]; then
+    ok "restore_gitignore_if_changed: uncommitted .gitignore with no HEAD version -> removed"
+else
+    not_ok "restore_gitignore_if_changed: uncommitted .gitignore with no HEAD version -> removed (file still present)"
+fi
+
+# --- Case 4: AUTO_LOOP_PROTECT_GITIGNORE=0 -> guard is a no-op ---
+printf 'SHOULD_SURVIVE_BECAUSE_GUARD_DISABLED\n' > "$GITIGNORE_FILE"
+AUTO_LOOP_PROTECT_GITIGNORE=0
+restore_gitignore_if_changed
+if [ -f "$GITIGNORE_FILE" ] && diff -q "$GITIGNORE_FILE" <(printf 'SHOULD_SURVIVE_BECAUSE_GUARD_DISABLED\n') >/dev/null 2>&1; then
+    ok "restore_gitignore_if_changed: AUTO_LOOP_PROTECT_GITIGNORE=0 -> no-op"
+else
+    not_ok "restore_gitignore_if_changed: AUTO_LOOP_PROTECT_GITIGNORE=0 -> no-op"
+fi
+AUTO_LOOP_PROTECT_GITIGNORE=1
+rm -f "$GITIGNORE_FILE"
+
+rm -rf "$GITIGNORE_TEST_DIR"
 trap - EXIT
 
 # =====================================================================
