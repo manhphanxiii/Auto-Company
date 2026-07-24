@@ -1,6 +1,6 @@
 # Human Action Needed
 
-Five items are sitting here because the team is not authorized to do them
+Six items are sitting here because the team is not authorized to do them
 autonomously (credentials it doesn't have, a web-UI-only checkbox, or
 third-party posting that requires a human check-in per policy). Consensus is
 re-read by the loop every cycle but isn't a place a human is likely to look —
@@ -17,7 +17,8 @@ without reading the whole file:
 | 2 | `gh auth refresh -s write:packages` (or `npm login`) | 1 command, ~30s browser OAuth | Unlocks npm/GH-Packages publish; prerequisite for #3 |
 | 5 | `npx wrangler login` (or set `CLOUDFLARE_API_TOKEN`) | 1 command, ~30s browser OAuth | Unlocks Cloudflare deploys; only matters if we later pursue an owned-domain SEO path — not urgent today |
 | 3 | GitHub Actions Marketplace listing checkbox | ~1 min on the v0.1.1 release page, pick a category | Discovery only; action already works without it |
-| 4 | Approve/edit the 2 awesome-list submission drafts | Requires actually reading and judging the drafts | Discovery only; policy requires a human check-in, not just a click |
+| 4 | Approve/edit the 2 awesome-list submission drafts (claude-watch) | Requires actually reading and judging the drafts | Discovery only; policy requires a human check-in, not just a click |
+| 6 | Approve/post the SpendSentry distribution hand-off package | ~2 min for the awesome-list form alone; more if also posting to Reddit/HN/IH | Currently the single highest-leverage lever for SpendSentry's 0-users problem — everything autonomous has already been done (LICENSE fix, topics, 2 genuine GitHub comments); traffic is still all-zero a day later because this step hasn't happened |
 
 ## 1. Restart the auto-loop daemon
 
@@ -107,7 +108,34 @@ Either unblocks Cloudflare Pages/Workers/KV/D1/R2 deployment, which is
 currently unavailable. (CLAUDE.md's tooling table was corrected in cycle #41,
 `fe20a4e`, to reflect this — it no longer claims `wrangler` is ready to use.)
 
+## 6. SpendSentry distribution hand-off package (ready to post, needs a human)
+
+SpendSentry has zero external users, zero stars, zero clones/views a full day
+after the LICENSE fix + GitHub topics expansion + 2 genuine on-topic GitHub
+comments (see `docs/operations/2026-07-23-spendsentry-outreach-plan.md` §3
+for what's already been done autonomously, and §5 for how traffic is being
+measured — checked this cycle via `gh api .../traffic/clones|views`, still
+all-zero). Per CLAUDE.md's safety guardrails, everything below needs a human
+to actually click "submit," since it's posting under a real identity on
+platforms the company doesn't own:
+
+- **Awesome-list submission** (highest priority — 2 minutes, unblocked, zero
+  risk, compounds forever): exact form fields are in
+  `docs/operations/2026-07-23-spendsentry-outreach-plan.md` §4.1
+  (`hesreallyhim/awesome-claude-code`, `recommend-resource.yml` template).
+- **Show HN / r/ClaudeCode / r/ClaudeAI / Indie Hackers**: full copy
+  pre-written and channel-adapted in
+  `docs/marketing/2026-07-23-spendsentry-launch-posts.md` and outreach-plan
+  §4.2-4.4. Each needs an account with some real history on that platform —
+  do not create a throwaway account to force this, per the plan's own
+  "astroturf trap" warning in §8.
+
+Read them, then either post the ones you have standing on, or edit the copy
+first. No further autonomous outreach action is planned until one of these
+lands and traffic can be attributed to it (§5's weekly snapshot).
+
 ---
 
-*Last consolidated: cycle #35, 2026-07-24. If you've actioned an item,
-delete its section (or the whole file, once all five are done).*
+*Last consolidated: cycle #52, 2026-07-24 (item 6 added; items 1-5 last
+touched cycle #35/#41). If you've actioned an item, delete its section (or
+the whole file, once all are done).*
