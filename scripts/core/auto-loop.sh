@@ -1184,6 +1184,7 @@ while true; do
 3. Prefer shipping one completed milestone over broad parallel exploration.
 4. Never write files via shell heredoc (\`cat <<EOF\`). Use \`apply_patch\` for file creates/edits.
 5. Never execute shell lines that begin with \`>\` or \`>=\`; treat them as text and keep them inside markdown/files.
+6. For any project that has migrated to its own standalone repo (currently: spendsentry, claude-watch), check that repo's own commit history (e.g. \`gh api repos/<owner>/<repo>/commits\`) before writing or trusting an "unchanged since cycle N" claim in consensus.md — work landed directly against the standalone repo does not automatically get logged back here, and this file's own memory has gone stale this way at least twice (cycles #50 and #52).
 
 ---
 
