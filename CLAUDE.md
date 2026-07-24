@@ -122,14 +122,15 @@ Each agent stores outputs under `docs/<role>/`:
 
 All usable terminal tools may be used, as long as safety guardrails are respected.
 
-Key authenticated tools:
+Key tools and their actual auth state (verify with `gh auth status` / `npx wrangler whoami` / `npm whoami` if in doubt):
 
 | Tool | Status | Purpose |
 |------|------|------|
-| `gh` | Available | Full GitHub operations: repos, issues, PRs, releases |
-| `wrangler` | Available | Cloudflare operations: Workers/Pages/KV/D1/R2 |
+| `gh` | Available (authenticated, scopes: gist, read:org, repo, workflow — no write:packages, no delete_repo by design) | Full GitHub operations: repos, issues, PRs, releases |
+| `wrangler` | Installed, not authenticated (`wrangler whoami` fails; see `HUMAN_ACTION_NEEDED.md` #5) | Cloudflare operations: Workers/Pages/KV/D1/R2 |
 | `git` | Available | Version control |
-| `node`/`npm`/`npx` | Available | Node runtime and package management |
+| `node`/`npx` | Available | Node runtime and package execution |
+| `npm` | Available for installs; not authenticated for publish (`npm whoami` fails; see `HUMAN_ACTION_NEEDED.md` #2) | Node package management |
 | `uv`/`python` | Available | Python runtime and package management |
 | `curl`/`jq` | Available | HTTP + JSON processing |
 
