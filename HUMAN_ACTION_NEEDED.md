@@ -104,7 +104,8 @@ credential-gated shape as items #1-3, just discovered later.
   team can deploy non-interactively going forward.
 
 Either unblocks Cloudflare Pages/Workers/KV/D1/R2 deployment, which is
-currently unavailable despite CLAUDE.md documenting it as ready to use.
+currently unavailable. (CLAUDE.md's tooling table was corrected in cycle #41,
+`fe20a4e`, to reflect this — it no longer claims `wrangler` is ready to use.)
 
 ---
 
