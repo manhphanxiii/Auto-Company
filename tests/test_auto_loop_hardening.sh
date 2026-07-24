@@ -1,8 +1,10 @@
 #!/bin/bash
-# Regression tests for the cycle-28 hardening mechanisms in
+# Regression tests for the cycle-28/30 hardening mechanisms in
 # scripts/core/auto-loop.sh:
-#   - pgid_matches_expected()   (pgid-reuse guard before a final SIGKILL)
-#   - rolling_window_record()   (claude-watch flapping kill-switch)
+#   - pgid_matches_expected()          (pgid-reuse guard before a final SIGKILL)
+#   - rolling_window_record()          (claude-watch flapping kill-switch)
+#   - claude_watch_trial_signoff_valid() (governance gate for the claude-watch
+#     dogfood trial -- cycle #30)
 #
 # Dependency-free, bash 3.2 compatible (macOS default /bin/bash). Does NOT
 # source auto-loop.sh directly -- that file runs `set -euo pipefail`/`set -m`
@@ -41,6 +43,7 @@ fi
 
 pgid_matches_expected_src=$(awk '/^pgid_matches_expected\(\) \{/,/^\}/' "$TARGET")
 rolling_window_record_src=$(awk '/^rolling_window_record\(\) \{/,/^\}/' "$TARGET")
+claude_watch_trial_signoff_valid_src=$(awk '/^claude_watch_trial_signoff_valid\(\) \{/,/^\}/' "$TARGET")
 
 if [ -z "$pgid_matches_expected_src" ]; then
     echo "Bail out! could not extract pgid_matches_expected() from $TARGET"
@@ -48,6 +51,10 @@ if [ -z "$pgid_matches_expected_src" ]; then
 fi
 if [ -z "$rolling_window_record_src" ]; then
     echo "Bail out! could not extract rolling_window_record() from $TARGET"
+    exit 1
+fi
+if [ -z "$claude_watch_trial_signoff_valid_src" ]; then
+    echo "Bail out! could not extract claude_watch_trial_signoff_valid() from $TARGET"
     exit 1
 fi
 
@@ -67,9 +74,11 @@ assert_single_function_extracted() {
 }
 assert_single_function_extracted "pgid_matches_expected" "$pgid_matches_expected_src"
 assert_single_function_extracted "rolling_window_record" "$rolling_window_record_src"
+assert_single_function_extracted "claude_watch_trial_signoff_valid" "$claude_watch_trial_signoff_valid_src"
 
 eval "$pgid_matches_expected_src"
 eval "$rolling_window_record_src"
+eval "$claude_watch_trial_signoff_valid_src"
 
 if ! type pgid_matches_expected >/dev/null 2>&1; then
     echo "Bail out! eval of extracted pgid_matches_expected() did not define the function"
@@ -79,6 +88,17 @@ if ! type rolling_window_record >/dev/null 2>&1; then
     echo "Bail out! eval of extracted rolling_window_record() did not define the function"
     exit 1
 fi
+if ! type claude_watch_trial_signoff_valid >/dev/null 2>&1; then
+    echo "Bail out! eval of extracted claude_watch_trial_signoff_valid() did not define the function"
+    exit 1
+fi
+
+# claude_watch_trial_signoff_valid() calls log(...) and references $PROJECT_DIR
+# and $SCRIPT_DIR as globals (matching how it's actually called in the real
+# script -- not parameters). Stub log() and point those globals at an isolated
+# scratch git repo below so these tests never read or mutate the real repo's
+# git index/working tree.
+log() { :; }
 
 # =====================================================================
 # pgid_matches_expected(pgid, pattern, self_pid) tests
@@ -287,6 +307,99 @@ if [ "$claude_watch_rolling_failures" -eq 3 ] && [ "${#claude_watch_rolling_hist
 else
     not_ok "rolling_window_record: custom-window-override (1,1,0,1,1 / window=4) -> eviction boundary moves correctly (got failures=$claude_watch_rolling_failures history=[${claude_watch_rolling_history[*]}])"
 fi
+
+# =====================================================================
+# claude_watch_trial_signoff_valid() tests
+# =====================================================================
+#
+# Uses an isolated scratch git repo (not the real project repo) so these
+# tests never stage, commit, or otherwise mutate this repository's actual
+# git state. PROJECT_DIR/SCRIPT_DIR point at the scratch repo for the
+# duration of this section only.
+
+SIGNOFF_TEST_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t signoff_test)"
+trap 'rm -rf "$SIGNOFF_TEST_DIR"' EXIT
+
+mkdir -p "$SIGNOFF_TEST_DIR/scripts/core" "$SIGNOFF_TEST_DIR/memories"
+git -C "$SIGNOFF_TEST_DIR" init -q
+git -C "$SIGNOFF_TEST_DIR" config user.email "test@example.com"
+git -C "$SIGNOFF_TEST_DIR" config user.name "Test"
+echo "# fixture auto-loop.sh v1" > "$SIGNOFF_TEST_DIR/scripts/core/auto-loop.sh"
+git -C "$SIGNOFF_TEST_DIR" add scripts/core/auto-loop.sh
+git -C "$SIGNOFF_TEST_DIR" commit -q -m "fixture commit"
+SIGNOFF_COMMITTED_SHA=$(git -C "$SIGNOFF_TEST_DIR" log -1 --format=%H -- scripts/core/auto-loop.sh)
+
+PROJECT_DIR="$SIGNOFF_TEST_DIR"
+SCRIPT_DIR="$SIGNOFF_TEST_DIR/scripts/core"
+SIGNOFF_MARKER="$SIGNOFF_TEST_DIR/memories/claude-watch-trial-signoff.md"
+
+# --- Case 1: missing marker -> not approved ---
+rm -f "$SIGNOFF_MARKER"
+if ! claude_watch_trial_signoff_valid; then
+    ok "claude_watch_trial_signoff_valid: missing marker -> not approved"
+else
+    not_ok "claude_watch_trial_signoff_valid: missing marker -> not approved"
+fi
+
+# --- Case 2: malformed marker (missing signoff_cycle) -> not approved ---
+printf 'approved_sha: %s\nimplementation_cycle: 28\n' "$SIGNOFF_COMMITTED_SHA" > "$SIGNOFF_MARKER"
+if ! claude_watch_trial_signoff_valid; then
+    ok "claude_watch_trial_signoff_valid: malformed marker (missing field) -> not approved"
+else
+    not_ok "claude_watch_trial_signoff_valid: malformed marker (missing field) -> not approved"
+fi
+
+# --- Case 3: same-cycle (implementation_cycle == signoff_cycle) -> not approved ---
+printf 'approved_sha: %s\nimplementation_cycle: 30\nsignoff_cycle: 30\n' "$SIGNOFF_COMMITTED_SHA" > "$SIGNOFF_MARKER"
+if ! claude_watch_trial_signoff_valid; then
+    ok "claude_watch_trial_signoff_valid: implementation_cycle == signoff_cycle -> not approved"
+else
+    not_ok "claude_watch_trial_signoff_valid: implementation_cycle == signoff_cycle -> not approved"
+fi
+
+# --- Case 4: stale SHA (approved_sha does not match committed SHA) -> not approved ---
+printf 'approved_sha: 0000000000000000000000000000000000000000\nimplementation_cycle: 28\nsignoff_cycle: 30\n' > "$SIGNOFF_MARKER"
+if ! claude_watch_trial_signoff_valid; then
+    ok "claude_watch_trial_signoff_valid: stale/mismatched approved_sha -> not approved"
+else
+    not_ok "claude_watch_trial_signoff_valid: stale/mismatched approved_sha -> not approved"
+fi
+
+# --- Case 5: valid marker, matching SHA, distinct cycles, clean tree -> approved ---
+printf 'approved_sha: %s\nimplementation_cycle: 28\nsignoff_cycle: 30\n' "$SIGNOFF_COMMITTED_SHA" > "$SIGNOFF_MARKER"
+if claude_watch_trial_signoff_valid; then
+    ok "claude_watch_trial_signoff_valid: valid marker + matching committed SHA + clean tree -> approved"
+else
+    not_ok "claude_watch_trial_signoff_valid: valid marker + matching committed SHA + clean tree -> approved"
+fi
+
+# --- Case 6: staged-but-uncommitted edit to the target file after signoff -> not approved ---
+# Regression case for a real bug qa-bach found in cycle #30 review: a plain
+# `git diff --quiet` (no ref) compares against the index, not HEAD, so a
+# staged-but-uncommitted edit left current_sha (from `git log`) unchanged AND
+# made the "no uncommitted changes" check pass -- silently approving code that
+# was never actually reviewed. Must use `git diff --quiet HEAD --`.
+echo "# fixture auto-loop.sh v2 (uncommitted edit)" >> "$SIGNOFF_TEST_DIR/scripts/core/auto-loop.sh"
+git -C "$SIGNOFF_TEST_DIR" add scripts/core/auto-loop.sh
+if ! claude_watch_trial_signoff_valid; then
+    ok "claude_watch_trial_signoff_valid: staged-but-uncommitted edit after signoff -> not approved"
+else
+    not_ok "claude_watch_trial_signoff_valid: staged-but-uncommitted edit after signoff -> not approved (BUG: fails open on staged changes)"
+fi
+git -C "$SIGNOFF_TEST_DIR" reset -q "$SIGNOFF_TEST_DIR/scripts/core/auto-loop.sh"
+git -C "$SIGNOFF_TEST_DIR" checkout -q -- "$SIGNOFF_TEST_DIR/scripts/core/auto-loop.sh"
+
+# --- Case 7: CRLF + trailing whitespace in marker fields still parses correctly -> approved ---
+printf 'approved_sha: %s  \r\nimplementation_cycle: 28\r\nsignoff_cycle: 30\r\n' "$SIGNOFF_COMMITTED_SHA" > "$SIGNOFF_MARKER"
+if claude_watch_trial_signoff_valid; then
+    ok "claude_watch_trial_signoff_valid: CRLF + trailing whitespace in marker fields -> still approved"
+else
+    not_ok "claude_watch_trial_signoff_valid: CRLF + trailing whitespace in marker fields -> still approved"
+fi
+
+rm -f "$SIGNOFF_MARKER"
+rm -rf "$SIGNOFF_TEST_DIR"
+trap - EXIT
 
 # =====================================================================
 # Summary

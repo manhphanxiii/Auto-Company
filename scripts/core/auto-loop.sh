@@ -462,6 +462,56 @@ resolve_claude_watch_bin() {
     return 1
 }
 
+# Governance gate for the claude-watch dogfood trial: AUTO_LOOP_USE_CLAUDE_WATCH=1
+# is only honored if a tracked signoff marker (memories/claude-watch-trial-signoff.md,
+# NOT gitignored -- a governance record, unlike docs/*/*) exists, is well-formed,
+# records a signoff_cycle distinct from implementation_cycle (a cycle cannot both
+# build this gate and satisfy it -- see cycle #30 consensus), and its approved_sha
+# matches the current committed SHA of this file with no uncommitted local edits.
+# Fails safe (returns 1, i.e. "not approved") on any missing/malformed/stale marker
+# so that an unreviewed future edit to this script cannot silently inherit an
+# earlier cycle's signoff.
+claude_watch_trial_signoff_valid() {
+    local marker="$PROJECT_DIR/memories/claude-watch-trial-signoff.md"
+    if [ ! -f "$marker" ]; then
+        log "claude-watch trial signoff marker not found at $marker"
+        return 1
+    fi
+
+    local approved_sha implementation_cycle signoff_cycle current_sha
+    approved_sha="$(grep -m1 '^approved_sha:' "$marker" | sed 's/^approved_sha:[[:space:]]*//' | tr -d '\r' | sed 's/[[:space:]]*$//')"
+    implementation_cycle="$(grep -m1 '^implementation_cycle:' "$marker" | sed 's/^implementation_cycle:[[:space:]]*//' | tr -d '\r' | sed 's/[[:space:]]*$//')"
+    signoff_cycle="$(grep -m1 '^signoff_cycle:' "$marker" | sed 's/^signoff_cycle:[[:space:]]*//' | tr -d '\r' | sed 's/[[:space:]]*$//')"
+
+    if [ -z "$approved_sha" ] || [ -z "$implementation_cycle" ] || [ -z "$signoff_cycle" ]; then
+        log "claude-watch trial signoff marker is malformed (missing approved_sha/implementation_cycle/signoff_cycle)"
+        return 1
+    fi
+
+    if [ "$implementation_cycle" = "$signoff_cycle" ]; then
+        log "claude-watch trial signoff marker invalid: implementation_cycle and signoff_cycle must differ (cycle $implementation_cycle cannot sign off on its own work)"
+        return 1
+    fi
+
+    current_sha="$(git -C "$PROJECT_DIR" log -1 --format=%H -- "$SCRIPT_DIR/auto-loop.sh" 2>/dev/null || true)"
+    if [ -z "$current_sha" ]; then
+        log "claude-watch trial signoff check: could not resolve current git SHA of auto-loop.sh"
+        return 1
+    fi
+
+    if [ "$approved_sha" != "$current_sha" ]; then
+        log "claude-watch trial signoff marker is stale: approved_sha ($approved_sha) does not match current auto-loop.sh SHA ($current_sha) -- code has changed since signoff"
+        return 1
+    fi
+
+    if ! git -C "$PROJECT_DIR" diff --quiet HEAD -- "$SCRIPT_DIR/auto-loop.sh" 2>/dev/null; then
+        log "claude-watch trial signoff check: auto-loop.sh has uncommitted (including staged) local changes; refusing to trust the signoff"
+        return 1
+    fi
+
+    return 0
+}
+
 # Sends SIGTERM (then SIGKILL after a short grace period) to an entire process
 # group, not just one tracked PID. Closes the orphaned-descendant gap: if the
 # tracked process (legacy `claude`/`codex`, or `claude-watch run -- claude`)
@@ -1012,7 +1062,11 @@ fi
 # Only relevant for ENGINE=claude; AUTO_LOOP_USE_CLAUDE_WATCH is ignored otherwise.
 if [ "$AUTO_LOOP_USE_CLAUDE_WATCH" = "1" ] && [ "$ENGINE" = "claude" ]; then
     if RESOLVED_CLAUDE_WATCH_BIN="$(resolve_claude_watch_bin)"; then
-        CLAUDE_WATCH_ACTIVE=1
+        if claude_watch_trial_signoff_valid; then
+            CLAUDE_WATCH_ACTIVE=1
+        else
+            log "AUTO_LOOP_USE_CLAUDE_WATCH=1 but the trial signoff is missing/invalid/stale (see memories/claude-watch-trial-signoff.md); refusing to activate claude-watch for this run. Falling back to legacy max-duration-only watchdog."
+        fi
     else
         log "AUTO_LOOP_USE_CLAUDE_WATCH=1 but claude-watch binary not found; falling back to legacy max-duration-only watchdog for this run."
     fi
@@ -1177,7 +1231,13 @@ This is Cycle #$loop_count. Act decisively."
             cycle_failed_reason="Timed out after ${CYCLE_TIMEOUT_LABEL}"
         fi
     elif [ "$EXIT_CODE" -ne 0 ]; then
-        cycle_failed_reason="Exit code $EXIT_CODE"
+        if [ "$cycle_used_claude_watch" -eq 1 ] && [ "$EXIT_CODE" -eq 3 ]; then
+            cycle_failed_reason="claude-watch permission-denial detector (exit 3)"
+        elif [ "$cycle_used_claude_watch" -eq 1 ] && [ "$EXIT_CODE" -eq 4 ]; then
+            cycle_failed_reason="claude-watch false-completion detector (exit 4)"
+        else
+            cycle_failed_reason="Exit code $EXIT_CODE"
+        fi
     elif ! validate_consensus; then
         cycle_failed_reason="consensus.md validation failed after cycle"
     elif ! consensus_changed_since_backup; then
@@ -1185,20 +1245,20 @@ This is Cycle #$loop_count. Act decisively."
     fi
 
     if [ "$cycle_soft_timeout" -eq 1 ]; then
-        log_cycle "$loop_count" "OK" "Timed out after ${CYCLE_TIMEOUT_LABEL} but consensus was updated; keeping progress (cost: ${CYCLE_COST}, subtype: ${CYCLE_SUBTYPE})"
+        log_cycle "$loop_count" "OK" "Timed out after ${CYCLE_TIMEOUT_LABEL} but consensus was updated; keeping progress (cost: ${CYCLE_COST}, subtype: ${CYCLE_SUBTYPE}, claude_watch: ${cycle_used_claude_watch})"
         if [ -n "$RESULT_TEXT" ]; then
             log_cycle "$loop_count" "SUMMARY" "$(echo "$RESULT_TEXT" | head -c 300)"
         fi
         error_count=0
     elif [ -z "$cycle_failed_reason" ]; then
-        log_cycle "$loop_count" "OK" "Completed (cost: ${CYCLE_COST}, subtype: ${CYCLE_SUBTYPE})"
+        log_cycle "$loop_count" "OK" "Completed (cost: ${CYCLE_COST}, subtype: ${CYCLE_SUBTYPE}, claude_watch: ${cycle_used_claude_watch})"
         if [ -n "$RESULT_TEXT" ]; then
             log_cycle "$loop_count" "SUMMARY" "$(echo "$RESULT_TEXT" | head -c 300)"
         fi
         error_count=0
     else
         error_count=$((error_count + 1))
-        log_cycle "$loop_count" "FAIL" "$cycle_failed_reason (cost: ${CYCLE_COST}, subtype: ${CYCLE_SUBTYPE}, errors: $error_count/$MAX_CONSECUTIVE_ERRORS)"
+        log_cycle "$loop_count" "FAIL" "$cycle_failed_reason (cost: ${CYCLE_COST}, subtype: ${CYCLE_SUBTYPE}, errors: $error_count/$MAX_CONSECUTIVE_ERRORS, claude_watch: ${cycle_used_claude_watch})"
 
         # Restore consensus on hard failure
         restore_consensus
