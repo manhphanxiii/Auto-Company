@@ -9,9 +9,51 @@ fresh signoff defeats the entire purpose of this mechanism.
 
 ## Parsed fields (do not reorder or rename)
 
-approved_sha: d73f5f802de89b841500412bd0e36582d439eda5
+approved_sha: f7720345b368f5b9ec98d92f275b3f4c740cf1de
 implementation_cycle: 28
-signoff_cycle: 30
+signoff_cycle: 32
+
+## Cycle #32 re-signoff (distinct-cycle refresh, not a new investigation)
+
+Cycle #31 committed `f772034` ("fix(auto-loop): root-cause the recurring
+.gitignore drift bug"), which changed `auto-loop.sh`'s SHA and invalidated
+the prior `approved_sha` (`d73f5f8`) by this marker's own design. Cycle #32
+re-ran the same bounded question ("is the 5-cycle/3-hour trial still safe to
+attempt, now against `f772034`") as two independent, blind passes:
+
+- **critic-munger**: GO. Independently ran `git diff d73f5f8 f772034 --
+  scripts/core/auto-loop.sh` and confirmed the entire diff is confined to
+  `restore_gitignore_if_changed()`/`snapshot_gitignore()` — a compare-against-
+  pre-cycle-snapshot bug fixed to compare-against-`HEAD` instead. Grepped for
+  `pgid_matches_expected`, `rolling_window_record`, `terminate_process_group`,
+  and threshold/backstop tokens: zero hits in the diff. Ran
+  `tests/test_auto_loop_hardening.sh` directly: 24/24 pass, including all
+  pgid-reuse and rolling-window cases.
+- **qa-bach**: GO on the code at `f772034` (same diff/test verification,
+  independently reproduced). **But surfaced a bigger problem**: the live
+  orchestrator daemon (PID 63637) has been running continuously since
+  **before cycle #28's commit** (`fa1ae0d`) — confirmed by comparing the
+  daemon's process start time against `fa1ae0d`/`7e696b7`/`d73f5f8`/`f772034`
+  commit timestamps, all of which postdate daemon start. Bash does not
+  reload an already-running script's function bodies from disk. **This
+  means the currently-running daemon has never loaded the pgid-reuse guard,
+  the rolling-window kill-switch, the signoff gate, or the `.gitignore` HEAD
+  fix — regardless of what's committed.** The uncommitted `.gitignore` drift
+  observed at the start of cycle #32 is this same daemon reverting to its
+  pre-cycle-28 snapshot every cycle, not a new bug.
+
+**Net verdict**: the code at `f772034` is safe to trial (GO, confirmed
+independently twice). **The current live daemon is NOT running that code**
+and must be restarted (fresh bash process) before either the trial or any
+of cycles #28-31's hardening takes effect at all. This is a distinct,
+higher-priority problem than "can the trial start" — see
+`memories/consensus.md` Cycle #32 for the elevated Next Action. Cycle #32's
+own agent (this review) is itself a child process of the stale daemon
+(confirmed via process ancestry: PID chain 63637 → 14655 → 14658 → claude),
+so stopping/restarting it is intentionally left as a human action, not
+attempted autonomously — consistent with cycle #30's original reasoning
+against an in-cycle bootstrap of infrastructure the reviewing cycle runs
+inside of.
 
 ## What was actually reviewed, and by whom
 
@@ -69,6 +111,9 @@ records a new `approved_sha`.
 
 ## Trial execution status
 
-Not yet started as of cycle #30. See `memories/consensus.md` Next Action for
-the exact mechanical steps to actually flip `AUTO_LOOP_USE_CLAUDE_WATCH=1` for
-the bounded trial described above.
+Not yet started as of cycle #32. Blocked on a human daemon restart (see
+Cycle #32 re-signoff section above) — the current live daemon predates
+cycle #28 and is not running any of the reviewed code. See
+`memories/consensus.md` Next Action for the exact mechanical steps to stop
+the stale daemon, restart it, and then flip `AUTO_LOOP_USE_CLAUDE_WATCH=1`
+for the bounded trial described above.
