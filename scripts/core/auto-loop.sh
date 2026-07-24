@@ -86,6 +86,12 @@ PROMPT_FILE="$PROJECT_DIR/PROMPT.md"
 PID_FILE="$PROJECT_DIR/.auto-loop.pid"
 STATE_FILE="$PROJECT_DIR/.auto-loop-state"
 
+# Captured once at process startup so a long-running daemon can later detect
+# that it is executing code older than what's committed to git HEAD (see
+# check_daemon_staleness() below for why this matters).
+PROCESS_START_SHA="$(git -C "$PROJECT_DIR" log -1 --format=%H -- "$SCRIPT_DIR/auto-loop.sh" 2>/dev/null || true)"
+PROCESS_START_TIME="$(date '+%Y-%m-%d %H:%M:%S')"
+
 # Loop settings (all overridable via env vars)
 ENGINE="${ENGINE:-claude}"
 ENGINE="$(echo "$ENGINE" | tr '[:upper:]' '[:lower:]')"
@@ -231,6 +237,33 @@ restore_gitignore_if_changed() {
     fi
 
     rm -f "$head_snapshot"
+}
+
+# Self-detection for a recurring incident: this daemon loads
+# scripts/core/auto-loop.sh into memory once, at process startup, and then
+# runs indefinitely. Hardening commits merged into git HEAD afterwards (e.g.
+# cycles #28-33) are invisible to the already-running process until a human
+# restarts the daemon (blocked on human action -- see HUMAN_ACTION_NEEDED.md).
+# Previously this drift was only ever caught when a coordinator manually ran
+# `ps` + `git log` and compared by hand, and it silently let at least one
+# already-fixed bug (.gitignore drift) keep recurring cycle after cycle
+# because the fix for it was never actually running. This check is pure
+# read-only observability -- no side effects, no restart, no behavior gate --
+# so it always runs unconditionally. It fails silently (no log, no error) if
+# either SHA can't be resolved (git unavailable, not a repo, etc.), matching
+# the fail-safe style of claude_watch_trial_signoff_valid() below.
+check_daemon_staleness() {
+    local cycle_num="$1"
+    local current_sha
+    current_sha="$(git -C "$PROJECT_DIR" log -1 --format=%H -- "$SCRIPT_DIR/auto-loop.sh" 2>/dev/null || true)"
+
+    if [ -z "$PROCESS_START_SHA" ] || [ -z "$current_sha" ]; then
+        return
+    fi
+
+    if [ "$current_sha" != "$PROCESS_START_SHA" ]; then
+        log_cycle "$cycle_num" "STALE" "This running process (PID $$) started at commit $PROCESS_START_SHA (at $PROCESS_START_TIME) but the committed script is now at $current_sha -- this process is executing outdated code. A human/operator restart of the daemon is required to pick up the newer commits (see HUMAN_ACTION_NEEDED.md)."
+    fi
 }
 
 get_file_size_bytes() {
@@ -1128,6 +1161,7 @@ while true; do
     cycle_log="$LOG_DIR/cycle-$(printf '%04d' "$loop_count")-$(date '+%Y%m%d-%H%M%S').log"
 
     log_cycle "$loop_count" "START" "Beginning work cycle"
+    check_daemon_staleness "$loop_count"
     save_state "running"
 
     # Log rotation

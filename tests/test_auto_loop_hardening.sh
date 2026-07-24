@@ -8,6 +8,9 @@
 #   - restore_gitignore_if_changed()   (.gitignore drift guard -- cycle #31 fix:
 #     compares against HEAD instead of a pre-cycle snapshot, so a cycle that
 #     legitimately edits AND commits .gitignore is no longer reverted)
+#   - check_daemon_staleness()         (self-detection for the recurring
+#     silent-drift incident: a long-running daemon process executing code
+#     older than what's committed to git HEAD)
 #
 # Dependency-free, bash 3.2 compatible (macOS default /bin/bash). Does NOT
 # source auto-loop.sh directly -- that file runs `set -euo pipefail`/`set -m`
@@ -48,6 +51,7 @@ pgid_matches_expected_src=$(awk '/^pgid_matches_expected\(\) \{/,/^\}/' "$TARGET
 rolling_window_record_src=$(awk '/^rolling_window_record\(\) \{/,/^\}/' "$TARGET")
 claude_watch_trial_signoff_valid_src=$(awk '/^claude_watch_trial_signoff_valid\(\) \{/,/^\}/' "$TARGET")
 restore_gitignore_if_changed_src=$(awk '/^restore_gitignore_if_changed\(\) \{/,/^\}/' "$TARGET")
+check_daemon_staleness_src=$(awk '/^check_daemon_staleness\(\) \{/,/^\}/' "$TARGET")
 
 if [ -z "$pgid_matches_expected_src" ]; then
     echo "Bail out! could not extract pgid_matches_expected() from $TARGET"
@@ -63,6 +67,10 @@ if [ -z "$claude_watch_trial_signoff_valid_src" ]; then
 fi
 if [ -z "$restore_gitignore_if_changed_src" ]; then
     echo "Bail out! could not extract restore_gitignore_if_changed() from $TARGET"
+    exit 1
+fi
+if [ -z "$check_daemon_staleness_src" ]; then
+    echo "Bail out! could not extract check_daemon_staleness() from $TARGET"
     exit 1
 fi
 
@@ -84,11 +92,13 @@ assert_single_function_extracted "pgid_matches_expected" "$pgid_matches_expected
 assert_single_function_extracted "rolling_window_record" "$rolling_window_record_src"
 assert_single_function_extracted "claude_watch_trial_signoff_valid" "$claude_watch_trial_signoff_valid_src"
 assert_single_function_extracted "restore_gitignore_if_changed" "$restore_gitignore_if_changed_src"
+assert_single_function_extracted "check_daemon_staleness" "$check_daemon_staleness_src"
 
 eval "$pgid_matches_expected_src"
 eval "$rolling_window_record_src"
 eval "$claude_watch_trial_signoff_valid_src"
 eval "$restore_gitignore_if_changed_src"
+eval "$check_daemon_staleness_src"
 
 if ! type pgid_matches_expected >/dev/null 2>&1; then
     echo "Bail out! eval of extracted pgid_matches_expected() did not define the function"
@@ -104,6 +114,10 @@ if ! type claude_watch_trial_signoff_valid >/dev/null 2>&1; then
 fi
 if ! type restore_gitignore_if_changed >/dev/null 2>&1; then
     echo "Bail out! eval of extracted restore_gitignore_if_changed() did not define the function"
+    exit 1
+fi
+if ! type check_daemon_staleness >/dev/null 2>&1; then
+    echo "Bail out! eval of extracted check_daemon_staleness() did not define the function"
     exit 1
 fi
 
@@ -489,6 +503,101 @@ AUTO_LOOP_PROTECT_GITIGNORE=1
 rm -f "$GITIGNORE_FILE"
 
 rm -rf "$GITIGNORE_TEST_DIR"
+trap - EXIT
+
+# =====================================================================
+# check_daemon_staleness(cycle_num) tests
+# =====================================================================
+#
+# Regression coverage for the recurring "daemon executing code older than
+# git HEAD" incident (reproduced across cycles #34/#35/#39/#40/#41). Uses an
+# isolated scratch git repo, never the real project repo. log_cycle() is
+# re-stubbed per-case to count invocations and capture args instead of the
+# no-op used by earlier sections, since here we need to assert whether/how
+# it was called.
+
+STALE_TEST_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t staleness_test)"
+trap 'rm -rf "$STALE_TEST_DIR"' EXIT
+mkdir -p "$STALE_TEST_DIR/scripts/core"
+git -C "$STALE_TEST_DIR" init -q
+git -C "$STALE_TEST_DIR" config user.email "test@example.com"
+git -C "$STALE_TEST_DIR" config user.name "Test"
+
+PROJECT_DIR="$STALE_TEST_DIR"
+SCRIPT_DIR="$STALE_TEST_DIR/scripts/core"
+
+echo "# fixture auto-loop.sh v1" > "$SCRIPT_DIR/auto-loop.sh"
+git -C "$STALE_TEST_DIR" add scripts/core/auto-loop.sh
+git -C "$STALE_TEST_DIR" commit -q -m "fixture v1"
+STALE_V1_SHA=$(git -C "$STALE_TEST_DIR" log -1 --format=%H -- scripts/core/auto-loop.sh)
+
+log_cycle_calls=0
+log_cycle_last_args=""
+log_cycle() {
+    log_cycle_calls=$((log_cycle_calls + 1))
+    log_cycle_last_args="$*"
+}
+
+# --- Case 1: process start SHA matches current HEAD SHA -> no staleness log ---
+PROCESS_START_SHA="$STALE_V1_SHA"
+PROCESS_START_TIME="2026-01-01 00:00:00"
+log_cycle_calls=0
+check_daemon_staleness 5
+if [ "$log_cycle_calls" -eq 0 ]; then
+    ok "check_daemon_staleness: process SHA matches current HEAD -> no log"
+else
+    not_ok "check_daemon_staleness: process SHA matches current HEAD -> no log (BUG: logged $log_cycle_calls time(s))"
+fi
+
+# --- Case 2: HEAD moved past process start SHA -> logs STALE with both SHAs ---
+echo "# fixture auto-loop.sh v2" > "$SCRIPT_DIR/auto-loop.sh"
+git -C "$STALE_TEST_DIR" add scripts/core/auto-loop.sh
+git -C "$STALE_TEST_DIR" commit -q -m "fixture v2"
+STALE_V2_SHA=$(git -C "$STALE_TEST_DIR" log -1 --format=%H -- scripts/core/auto-loop.sh)
+
+log_cycle_calls=0
+log_cycle_last_args=""
+check_daemon_staleness 7
+if [ "$log_cycle_calls" -eq 1 ] \
+    && printf '%s' "$log_cycle_last_args" | grep -q "STALE" \
+    && printf '%s' "$log_cycle_last_args" | grep -q "$STALE_V1_SHA" \
+    && printf '%s' "$log_cycle_last_args" | grep -q "$STALE_V2_SHA"; then
+    ok "check_daemon_staleness: HEAD moved past process start SHA -> logs STALE with both SHAs"
+else
+    not_ok "check_daemon_staleness: HEAD moved past process start SHA -> logs STALE with both SHAs (got calls=$log_cycle_calls args=[$log_cycle_last_args])"
+fi
+
+# --- Case 3: PROCESS_START_SHA unresolved (empty) -> silently no-ops ---
+PROCESS_START_SHA=""
+log_cycle_calls=0
+check_daemon_staleness 9
+if [ "$log_cycle_calls" -eq 0 ]; then
+    ok "check_daemon_staleness: empty PROCESS_START_SHA -> silent no-op"
+else
+    not_ok "check_daemon_staleness: empty PROCESS_START_SHA -> silent no-op (BUG: logged $log_cycle_calls time(s))"
+fi
+
+# --- Case 4: current committed SHA unresolved (file never committed) -> silently no-ops ---
+UNCOMMITTED_TEST_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t staleness_test_uncommitted)"
+mkdir -p "$UNCOMMITTED_TEST_DIR/scripts/core"
+git -C "$UNCOMMITTED_TEST_DIR" init -q
+git -C "$UNCOMMITTED_TEST_DIR" config user.email "test@example.com"
+git -C "$UNCOMMITTED_TEST_DIR" config user.name "Test"
+echo "# never committed" > "$UNCOMMITTED_TEST_DIR/scripts/core/auto-loop.sh"
+PROJECT_DIR="$UNCOMMITTED_TEST_DIR"
+SCRIPT_DIR="$UNCOMMITTED_TEST_DIR/scripts/core"
+PROCESS_START_SHA="$STALE_V1_SHA"
+log_cycle_calls=0
+check_daemon_staleness 11
+if [ "$log_cycle_calls" -eq 0 ]; then
+    ok "check_daemon_staleness: current committed SHA unresolvable -> silent no-op"
+else
+    not_ok "check_daemon_staleness: current committed SHA unresolvable -> silent no-op (BUG: logged $log_cycle_calls time(s))"
+fi
+rm -rf "$UNCOMMITTED_TEST_DIR"
+
+log_cycle() { :; }
+rm -rf "$STALE_TEST_DIR"
 trap - EXIT
 
 # =====================================================================
