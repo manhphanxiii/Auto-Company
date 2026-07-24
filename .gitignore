@@ -189,3 +189,6 @@ docs/*/*
 # Ignore all memories (keep folder marker only)
 memories/*
 !memories/.gitkeep
+# Governance records are tracked, unlike the rest of memories/ (e.g. consensus.md,
+# which is high-churn runtime state, not versioned history).
+!memories/claude-watch-trial-signoff.md
