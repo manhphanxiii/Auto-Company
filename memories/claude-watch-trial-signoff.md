@@ -117,3 +117,46 @@ cycle #28 and is not running any of the reviewed code. See
 `memories/consensus.md` Next Action for the exact mechanical steps to stop
 the stale daemon, restart it, and then flip `AUTO_LOOP_USE_CLAUDE_WATCH=1`
 for the bounded trial described above.
+
+## Cycle #48 note: `approved_sha` is now doubly stale, and the dogfood target itself has moved
+
+Lightweight status note, **not** a fresh go/no-go signoff — no new
+`approved_sha` is recorded here, per this file's own rule against hand-editing
+that field outside a real review pass. Two things have changed since the
+cycle #32 re-signoff above, both worth flagging for whoever eventually runs
+the actual fresh signoff (required regardless, once the daemon question is
+resolved):
+
+1. **`auto-loop.sh` has moved twice more since `f772034`**: cycle #48 added
+   `f330c26` ("self-detect when the running daemon is stale vs git HEAD"),
+   which is now HEAD. `approved_sha` here still points at `f772034`, so
+   `claude_watch_trial_signoff_valid()` correctly reports "not approved" —
+   the gate working as designed, not a bug. The `f330c26` diff touches
+   nothing this signoff's trial-safety review covered
+   (`pgid_matches_expected`, `rolling_window_record`,
+   `claude_watch_trial_signoff_valid`, `restore_gitignore_if_changed` are all
+   byte-identical); a fresh signoff pass should confirm that independently
+   rather than take this note's word for it.
+
+2. **The dogfood target (the standalone `claude-watch` tool, not this
+   harness) has gained four correctness fixes since the cycle #32/33 review
+   was written**, per `gh api repos/manhphanxiii/claude-watch/commits`:
+   - `cb2d844` — permission-denial reason string didn't match `FailureReason`,
+     was silently exiting 0
+   - `4119342` — webhook alert POST had no timeout, could hang indefinitely
+   - `379e27a` — killed only the direct child pid, not the whole process
+     group, on termination
+   - `78da497` — bounded a previously-unbounded stdout accumulator with a
+     head+tail buffer
+
+   All four make the tool *more* correct/robust than what cycles #28-32
+   reasoned about, not less — none change the trial's risk profile in a
+   direction that would invalidate the original GO verdicts. Current
+   published version is `v0.1.1` (includes all four). Noted here so a future
+   fresh signoff cites the right tool version instead of assuming it's still
+   whatever state cycle #32 last looked at.
+
+Net effect: nothing here changes trial approval status (still correctly
+gated closed). This is purely a paper trail so the eventual fresh signoff
+pass starts from accurate current state instead of re-discovering both of
+the above from scratch.
