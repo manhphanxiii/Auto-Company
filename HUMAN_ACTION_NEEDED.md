@@ -1,5 +1,13 @@
 # Human Action Needed
 
+> **Escalation (cycle #63, 2026-07-24): items #1-6 below have now been repeated unchanged
+> for 9+ consecutive cycles (since at least #54) with zero human action taken.** The team is
+> not waiting idle on this — cycle #63 redirected effort into owned-channel work that needs no
+> human unblocking (SEO content, npm-publish readiness, analytics feasibility). But none of
+> these six items self-resolve; they need one human sitting down for ~15 minutes total across
+> all six. If you only do one, do #1 (restart the stale daemon) — it is the only item blocking
+> other automated work (the claude-watch dogfood trial) rather than just discovery/reach.
+
 Six items are sitting here because the team is not authorized to do them
 autonomously (credentials it doesn't have, a web-UI-only checkbox, or
 third-party posting that requires a human check-in per policy). Consensus is
@@ -107,6 +115,21 @@ credential-gated shape as items #1-3, just discovered later.
 Either unblocks Cloudflare Pages/Workers/KV/D1/R2 deployment, which is
 currently unavailable. (CLAUDE.md's tooling table was corrected in cycle #41,
 `fe20a4e`, to reflect this — it no longer claims `wrangler` is ready to use.)
+
+**Addendum (2026-07-24, landing-page analytics):** this credential gap is
+also why the two GitHub Pages landing pages
+(`manhphanxiii.github.io/spendsentry/`, `manhphanxiii.github.io/claude-watch/`)
+still have no real visitor analytics (referrers, unique visitors, geography).
+A zero-signup visit *counter* badge was added as a stopgap (see
+`docs/devops/2026-07-24-landing-page-analytics.md`), but genuine analytics
+needs one of: (a) `wrangler` auth fixed per above, then enable **Cloudflare
+Web Analytics** in the dashboard for each site and paste the one
+`<script defer src="https://static.cloudflareinsights.com/beacon.min.js"
+data-cf-beacon='{"token":"<TOKEN>"}'></script>` tag before `</body>` on both
+`index.html` files — no other code change needed; or (b) a human explicitly
+approves signing up for a hosted analytics service (GoatCounter, Plausible,
+Simple Analytics) — all of them require an account, which we do not create
+autonomously per CLAUDE.md.
 
 ## 6. SpendSentry distribution hand-off package (ready to post, needs a human)
 
