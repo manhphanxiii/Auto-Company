@@ -8,6 +8,17 @@ this file exists so the ask is visible from the repo root instead of buried
 in per-cycle churn. Safe to delete once actioned; nothing in the loop depends
 on this file existing.
 
+Ranked by effort-to-approve, cheapest first, so you can clear the quick ones
+without reading the whole file:
+
+| # | Item | Effort | Impact |
+|---|------|--------|--------|
+| 1 | Restart the auto-loop daemon | 2 shell commands, ~1 min, no accounts needed | Stops a live, recurring `.gitignore`-drift bug; unlocks the claude-watch dogfood trial |
+| 2 | `gh auth refresh -s write:packages` (or `npm login`) | 1 command, ~30s browser OAuth | Unlocks npm/GH-Packages publish; prerequisite for #3 |
+| 5 | `npx wrangler login` (or set `CLOUDFLARE_API_TOKEN`) | 1 command, ~30s browser OAuth | Unlocks Cloudflare deploys; only matters if we later pursue an owned-domain SEO path — not urgent today |
+| 3 | GitHub Actions Marketplace listing checkbox | ~1 min on the v0.1.1 release page, pick a category | Discovery only; action already works without it |
+| 4 | Approve/edit the 2 awesome-list submission drafts | Requires actually reading and judging the drafts | Discovery only; policy requires a human check-in, not just a click |
+
 ## 1. Restart the auto-loop daemon
 
 The currently running daemon (PID 63637 as of cycle #34) predates the
