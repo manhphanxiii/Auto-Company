@@ -47,9 +47,31 @@
 #   CLAUDE_WATCH_GRACE_PERIOD=10
 #                               # Seconds between claude-watch's SIGTERM and SIGKILL
 #   CLAUDE_WATCH_WEBHOOK=...    # Optional webhook URL for claude-watch failure alerts (empty = none)
+#   CLAUDE_WATCH_AUTO_DISABLE_THRESHOLD=3
+#                               # Automated kill-switch: after this many CONSECUTIVE cycles where
+#                               # claude-watch was active AND the cycle failed in a way attributable
+#                               # to claude-watch itself (idle-timeout/max-duration/exit 1/2, the
+#                               # permission-denial/false-completion detectors/exit 3/4, or the
+#                               # backstop watchdog), the loop flips the runtime CLAUDE_WATCH_ACTIVE
+#                               # gate to 0 in-memory (no restart needed) and falls back to the legacy
+#                               # watchdog for the rest of this run. Resets to 0 on any claude-watch-
+#                               # active cycle that was NOT attributable to claude-watch. Exists
+#                               # because no human watches these logs to do this manually. See
+#                               # docs/devops/2026-07-24-claude-watch-dogfood-integration.md.
 # ============================================================
 
 set -euo pipefail
+
+# Enable job control (monitor mode) even though this script is non-interactive.
+# This is required (not optional) for the process-group-based kill below: with
+# job control OFF (bash's default in a script), a backgrounded job stays in the
+# SAME process group as this script itself, so there is no group to isolate
+# and no safe way to signal "this job and everything it forked" without also
+# risking the loop's own process. With job control ON, each `... &` launched
+# directly in this script gets its own new process group whose pgid equals its
+# own pid (verified empirically on this system; `setsid` is not installed here,
+# so it is not a usable alternative — confirmed with `command -v setsid`).
+set -m
 
 # === Resolve project root (always relative to this script) ===
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -83,9 +105,18 @@ CLAUDE_WATCH_IDLE_TIMEOUT="${CLAUDE_WATCH_IDLE_TIMEOUT:-900}"
 CLAUDE_WATCH_MAX_DURATION="${CLAUDE_WATCH_MAX_DURATION:-$CYCLE_TIMEOUT_SECONDS}"
 CLAUDE_WATCH_GRACE_PERIOD="${CLAUDE_WATCH_GRACE_PERIOD:-10}"
 CLAUDE_WATCH_WEBHOOK="${CLAUDE_WATCH_WEBHOOK:-}"
+CLAUDE_WATCH_AUTO_DISABLE_THRESHOLD="${CLAUDE_WATCH_AUTO_DISABLE_THRESHOLD:-3}"
 RESOLVED_ENGINE_BIN=""
 RESOLVED_CLAUDE_WATCH_BIN=""
 CLAUDE_WATCH_ACTIVE=0
+# Set by run_claude_cycle_watched on every watched cycle: 1 if the outcome is
+# attributable to claude-watch itself (idle-timeout, max-duration, the
+# permission-denial/false-completion detectors, or the backstop watchdog),
+# 0 for a clean exit or a passthrough exit code from the wrapped claude
+# process. Distinct from CYCLE_TIMED_OUT, which only covers the subset of
+# these (1/2/backstop) where the soft-timeout-but-consensus-updated escape
+# hatch is meaningful -- see the auto-disable kill-switch in the main loop.
+CLAUDE_WATCH_ATTRIBUTABLE_FAILURE=0
 CYCLE_TIMEOUT_LABEL="${CYCLE_TIMEOUT_SECONDS}s"
 
 if [ "$ENGINE" != "claude" ] && [ "$ENGINE" != "codex" ]; then
@@ -429,6 +460,37 @@ resolve_claude_watch_bin() {
     return 1
 }
 
+# Sends SIGTERM (then SIGKILL after a short grace period) to an entire process
+# group, not just one tracked PID. Closes the orphaned-descendant gap: if the
+# tracked process (legacy `claude`/`codex`, or `claude-watch run -- claude`)
+# had already forked a child by the time it was killed/exited (e.g. a shell
+# command from a tool call), that child is invisible to a plain `kill <pid>`
+# and would otherwise keep running indefinitely under the same permission
+# mode. Relies on the caller having launched the tracked process as its own
+# process group (see `set -m` above), so pgid == the tracked pid.
+#
+# Always call this AFTER `wait`ing on the tracked pid, regardless of why it
+# exited (clean success, legacy watchdog timeout, claude-watch's own
+# idle-timeout/max-duration kill, or any other exit) — it is a final sweep,
+# not a substitute for the existing timeout logic. Safe to call on an
+# already-empty group: never errors, never hangs, never touches PID/PGID 0 or
+# 1 (which would reach far more than the intended group).
+terminate_process_group() {
+    local pgid="$1"
+
+    if [ -z "$pgid" ] || [ "$pgid" -le 1 ] 2>/dev/null; then
+        return 0
+    fi
+
+    if kill -0 -- "-$pgid" 2>/dev/null; then
+        kill -TERM -- "-$pgid" 2>/dev/null || true
+        sleep 5
+        if kill -0 -- "-$pgid" 2>/dev/null; then
+            kill -KILL -- "-$pgid" 2>/dev/null || true
+        fi
+    fi
+}
+
 run_codex_cycle() {
     local prompt="$1"
     local output_file timeout_flag message_file
@@ -448,6 +510,11 @@ run_codex_cycle() {
         "${codex_cmd[@]}"
     ) > "$output_file" 2>&1 &
     local codex_pid=$!
+    # `set -m` (enabled at script startup) gives this backgrounded subshell
+    # its own process group, with pgid == its own pid. Tracked so the
+    # unconditional cleanup below can reach any orphaned descendant a plain
+    # `kill $codex_pid` would miss.
+    local codex_pgid="$codex_pid"
 
     (
         sleep "$CYCLE_TIMEOUT_SECONDS"
@@ -460,12 +527,18 @@ run_codex_cycle() {
     ) &
     local watchdog_pid=$!
 
-    wait "$codex_pid"
+    wait "$codex_pid" 2>/dev/null
     EXIT_CODE=$?
 
     kill "$watchdog_pid" 2>/dev/null || true
     wait "$watchdog_pid" 2>/dev/null || true
     set -e
+
+    # Unconditional cleanup regardless of why codex_pid exited (clean success,
+    # watchdog timeout, or any other exit) — sweep the whole process group
+    # before reading the output files so no orphaned descendant is left
+    # running, or still writing to output_file, invisibly.
+    terminate_process_group "$codex_pgid"
 
     OUTPUT=$(cat "$output_file")
     RESULT_MESSAGE=$(cat "$message_file" 2>/dev/null || true)
@@ -490,7 +563,11 @@ run_claude_cycle() {
 }
 
 # Default path (AUTO_LOOP_USE_CLAUDE_WATCH=0, or claude-watch unresolvable).
-# Byte-for-byte the same behavior as before this integration was added.
+# The success/timeout-detection logic itself is byte-for-byte the same
+# behavior as before this integration was added; the only addition is the
+# unconditional process-group cleanup sweep after `wait` returns (see
+# terminate_process_group above), which does not change EXIT_CODE,
+# CYCLE_TIMED_OUT, OUTPUT, or timing for the success/normal-timeout case.
 run_claude_cycle_legacy() {
     local prompt="$1"
     local output_file timeout_flag
@@ -514,6 +591,11 @@ run_claude_cycle_legacy() {
         "${claude_cmd[@]}"
     ) > "$output_file" 2>&1 &
     local claude_pid=$!
+    # `set -m` (enabled at script startup) gives this backgrounded subshell
+    # its own process group, with pgid == its own pid. Tracked so the
+    # unconditional cleanup below can reach any orphaned descendant a plain
+    # `kill $claude_pid` would miss.
+    local claude_pgid="$claude_pid"
 
     (
         sleep "$CYCLE_TIMEOUT_SECONDS"
@@ -526,12 +608,20 @@ run_claude_cycle_legacy() {
     ) &
     local watchdog_pid=$!
 
-    wait "$claude_pid"
+    wait "$claude_pid" 2>/dev/null
     EXIT_CODE=$?
 
     kill "$watchdog_pid" 2>/dev/null || true
     wait "$watchdog_pid" 2>/dev/null || true
     set -e
+
+    # Unconditional cleanup regardless of why claude_pid exited (clean
+    # success, legacy watchdog timeout, or any other exit) — sweep the whole
+    # process group before reading the output file so no orphaned descendant
+    # is left running, or still writing to output_file, invisibly. This is
+    # prerequisite #1 from the blocking-prerequisites review: closes the
+    # orphaned-descendant gap that a plain `kill $claude_pid` leaves open.
+    terminate_process_group "$claude_pgid"
 
     OUTPUT=$(cat "$output_file")
     RESULT_MESSAGE="$OUTPUT"
@@ -554,9 +644,10 @@ run_claude_cycle_legacy() {
 # call rather than emitting incremental events — see the devops doc).
 run_claude_cycle_watched() {
     local prompt="$1"
-    local output_file
+    local output_file backstop_flag
 
     output_file=$(mktemp)
+    backstop_flag=$(mktemp)
     CYCLE_OUTPUT_FORMAT="stream-json"
 
     set +e
@@ -582,30 +673,129 @@ run_claude_cycle_watched() {
         watch_cmd+=("${claude_cmd[@]}")
 
         "${watch_cmd[@]}"
-    ) > "$output_file" 2>&1
+    ) > "$output_file" 2>&1 &
+    local watch_pid=$!
+    # `set -m` (enabled at script startup) gives this backgrounded subshell
+    # its own process group, with pgid == its own pid. Tracked so the
+    # unconditional cleanup below can reach any orphaned descendant even
+    # though claude-watch's own kill sequence only signals the direct
+    # `claude` child it spawned, not that child's further descendants.
+    local watch_pgid="$watch_pid"
+
+    # Backstop watchdog: empirically, `wait "$watch_pid"` is NOT guaranteed to
+    # return promptly on its own even after claude-watch correctly detects and
+    # kills its direct child. claude-watch (Node) gates its own process exit
+    # on the wrapped child's stdout/stderr stream fully closing; an orphaned
+    # descendant that inherited a duplicate of that same pipe (exactly the
+    # gap this function's cleanup exists to close) keeps the pipe open and
+    # can therefore delay claude-watch's own exit — and thus this `wait` — for
+    # as long as that descendant survives. This is the "delayed-return" risk
+    # from finding #4 in the devops doc, confirmed empirically while building
+    # this fix: without this backstop, a hung orphan can make the watched
+    # path take as long as the orphan lives to return control to the loop,
+    # regardless of how tight CLAUDE_WATCH_IDLE_TIMEOUT is set. Bounded to
+    # whichever ceiling is larger — the same overall ceiling the legacy path
+    # already guarantees (CYCLE_TIMEOUT_SECONDS), or claude-watch's own
+    # configured max-duration if that was set higher than the cycle timeout —
+    # plus room for claude-watch's own grace period to finish a clean kill
+    # first.
+    local watch_backstop_timeout
+    if [ "$CLAUDE_WATCH_MAX_DURATION" -gt "$CYCLE_TIMEOUT_SECONDS" ]; then
+        watch_backstop_timeout=$((CLAUDE_WATCH_MAX_DURATION + CLAUDE_WATCH_GRACE_PERIOD + 5))
+    else
+        watch_backstop_timeout=$((CYCLE_TIMEOUT_SECONDS + CLAUDE_WATCH_GRACE_PERIOD + 5))
+    fi
+    (
+        sleep "$watch_backstop_timeout"
+        if kill -0 -- "-$watch_pgid" 2>/dev/null; then
+            echo "1" > "$backstop_flag"
+            kill -TERM -- "-$watch_pgid" 2>/dev/null || true
+            sleep 5
+            kill -KILL -- "-$watch_pgid" 2>/dev/null || true
+        fi
+    ) &
+    local watch_backstop_pid=$!
+
+    wait "$watch_pid" 2>/dev/null
     EXIT_CODE=$?
+
+    kill "$watch_backstop_pid" 2>/dev/null || true
+    wait "$watch_backstop_pid" 2>/dev/null || true
     set -e
+
+    # Unconditional cleanup regardless of why the wrapped process returned
+    # (clean exit, claude-watch's own idle-timeout/max-duration kill, one of
+    # its permission-denial/false-completion detectors, the backstop watchdog
+    # above, or anything else) — sweep the whole process group before reading
+    # the output file so no orphaned descendant is left running, or still
+    # holding output_file's fd open. This is prerequisite #1 from the
+    # blocking-prerequisites review, applied to the watched path.
+    terminate_process_group "$watch_pgid"
 
     OUTPUT=$(cat "$output_file")
     RESULT_MESSAGE="$OUTPUT"
     rm -f "$output_file"
 
-    # claude-watch exit codes: 0 clean, 1 idle-timeout, 2 max-duration,
-    # 3/4 stream-json-only silent-failure detectors, otherwise the wrapped
-    # claude process's own exit code passed through unchanged.
-    case "$EXIT_CODE" in
-        1)
-            CYCLE_TIMED_OUT=1
-            CYCLE_TIMEOUT_LABEL="${CLAUDE_WATCH_IDLE_TIMEOUT}s idle-timeout"
-            ;;
-        2)
-            CYCLE_TIMED_OUT=1
-            CYCLE_TIMEOUT_LABEL="${CLAUDE_WATCH_MAX_DURATION}s max-duration"
-            ;;
-        *)
-            CYCLE_TIMED_OUT=0
-            ;;
-    esac
+    if [ -s "$backstop_flag" ]; then
+        # The backstop fired: claude-watch itself did not return within
+        # watch_backstop_timeout, so we force-killed the whole group
+        # (including claude-watch's own process) directly. This unavoidably
+        # clobbers whatever exit code claude-watch would otherwise have
+        # reported (EXIT_CODE here is just whatever a SIGTERM/SIGKILL of the
+        # node process happens to produce, e.g. 143) — so this case is
+        # classified as a timeout on EXIT_CODE alone, not the exit-code
+        # case below, and must still count as claude-watch-attributable for
+        # the auto-disable kill-switch (prerequisite #2): this scenario is
+        # the clearest possible evidence claude-watch is not returning
+        # control reliably.
+        CYCLE_TIMED_OUT=1
+        CLAUDE_WATCH_ATTRIBUTABLE_FAILURE=1
+        CYCLE_TIMEOUT_LABEL="${watch_backstop_timeout}s claude-watch-backstop (claude-watch did not return control in time, likely an orphaned descendant per finding #4)"
+    else
+        # claude-watch exit codes: 0 clean, 1 idle-timeout, 2 max-duration,
+        # 3/4 stream-json-only silent-failure detectors, otherwise the
+        # wrapped claude process's own exit code passed through unchanged.
+        #
+        # 3/4 are NOT folded into CYCLE_TIMED_OUT: they are not timeouts (the
+        # process already returned a definite exit code, nothing was killed
+        # mid-flight), and the soft-timeout "consensus was still updated ->
+        # treat as OK" escape hatch below would be actively wrong here -- a
+        # false-completion detection specifically means the model claimed
+        # done without actually finishing, so a consensus.md that merely
+        # looks updated must not be allowed to launder that into an OK. They
+        # already fall through to the generic `Exit code $EXIT_CODE` hard
+        # failure path via the CYCLE_TIMED_OUT=0 case below, same as before.
+        #
+        # They DO count as CLAUDE_WATCH_ATTRIBUTABLE_FAILURE=1, unlike before
+        # this fix: claude-watch positively detecting a bad terminal state is
+        # at least as strong a signal for the auto-disable kill-switch as an
+        # idle-timeout, arguably stronger. Previously this case fell into the
+        # same `*)` branch as a genuine exit-0 success/passthrough code, which
+        # reset the kill-switch counter to 0 instead of counting toward it --
+        # found in independent critic-munger review of this diff, confirmed
+        # against this exact code before being fixed.
+        case "$EXIT_CODE" in
+            1)
+                CYCLE_TIMED_OUT=1
+                CLAUDE_WATCH_ATTRIBUTABLE_FAILURE=1
+                CYCLE_TIMEOUT_LABEL="${CLAUDE_WATCH_IDLE_TIMEOUT}s idle-timeout"
+                ;;
+            2)
+                CYCLE_TIMED_OUT=1
+                CLAUDE_WATCH_ATTRIBUTABLE_FAILURE=1
+                CYCLE_TIMEOUT_LABEL="${CLAUDE_WATCH_MAX_DURATION}s max-duration"
+                ;;
+            3|4)
+                CYCLE_TIMED_OUT=0
+                CLAUDE_WATCH_ATTRIBUTABLE_FAILURE=1
+                ;;
+            *)
+                CYCLE_TIMED_OUT=0
+                CLAUDE_WATCH_ATTRIBUTABLE_FAILURE=0
+                ;;
+        esac
+    fi
+    rm -f "$backstop_flag"
 }
 
 run_engine_cycle() {
@@ -770,6 +960,7 @@ trap cleanup SIGTERM SIGINT SIGHUP
 # Initialize counters
 loop_count=0
 error_count=0
+claude_watch_consecutive_timeouts=0
 
 log "=== Auto Company Loop Started (PID $$) ==="
 log "Project: $PROJECT_DIR"
@@ -853,7 +1044,34 @@ $CONSENSUS
 This is Cycle #$loop_count. Act decisively."
 
     # Run selected engine in headless mode with per-cycle timeout
+    cycle_used_claude_watch=$CLAUDE_WATCH_ACTIVE
     run_engine_cycle "$FULL_PROMPT"
+
+    # Automated kill-switch (prerequisite #2 from the blocking-prerequisites
+    # review): track CONSECUTIVE cycles where claude-watch was the active path
+    # AND the cycle failed in a way attributable to claude-watch itself
+    # (idle-timeout, max-duration, the permission-denial/false-completion
+    # detectors, or the backstop watchdog -- see CLAUDE_WATCH_ATTRIBUTABLE_FAILURE
+    # in run_claude_cycle_watched). Deliberately NOT keyed on CYCLE_TIMED_OUT:
+    # that flag also gates the soft-timeout "consensus still updated -> OK"
+    # escape hatch, which only makes sense for the timeout-like subset
+    # (idle-timeout/max-duration/backstop) -- folding the detector cases into
+    # it would wrongly grant them that escape hatch too. Reset on any
+    # claude-watch-active cycle that was NOT attributable to claude-watch. No
+    # human reads these logs to do this manually, so the disable must be
+    # automatic, in-memory, and same-process — same pattern as error_count
+    # below.
+    if [ "$cycle_used_claude_watch" -eq 1 ]; then
+        if [ "$CLAUDE_WATCH_ATTRIBUTABLE_FAILURE" -eq 1 ]; then
+            claude_watch_consecutive_timeouts=$((claude_watch_consecutive_timeouts + 1))
+            if [ "$claude_watch_consecutive_timeouts" -ge "$CLAUDE_WATCH_AUTO_DISABLE_THRESHOLD" ] && [ "$CLAUDE_WATCH_ACTIVE" -eq 1 ]; then
+                CLAUDE_WATCH_ACTIVE=0
+                log_cycle "$loop_count" "GUARD" "Auto-disabled claude-watch after $claude_watch_consecutive_timeouts consecutive claude-watch-attributable failures (idle-timeout/max-duration/permission-denial/false-completion/backstop); falling back to legacy watchdog for the remainder of this run. (AUTO_LOOP_USE_CLAUDE_WATCH left unchanged for logging; only the runtime CLAUDE_WATCH_ACTIVE gate was flipped.)"
+            fi
+        else
+            claude_watch_consecutive_timeouts=0
+        fi
+    fi
 
     # Save full output to cycle log
     echo "$OUTPUT" > "$cycle_log"
