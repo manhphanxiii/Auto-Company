@@ -518,6 +518,25 @@ pgid_matches_expected() {
     return 1
 }
 
+# Records one claude-watch-active cycle's attributable-failure bit into the
+# rolling window, evicting the oldest entry once the window exceeds
+# window_size. Mutates the global claude_watch_rolling_history array and
+# claude_watch_rolling_failures counter in place (bash 3.2 has no reliable
+# array pass-by-reference, so this operates on the same globals the main
+# loop used inline before this extraction).
+rolling_window_record() {
+    local bit="$1"
+    local window_size="$2"
+
+    claude_watch_rolling_history+=("$bit")
+    claude_watch_rolling_failures=$((claude_watch_rolling_failures + bit))
+    if [ "${#claude_watch_rolling_history[@]}" -gt "$window_size" ]; then
+        local evicted_bit="${claude_watch_rolling_history[0]}"
+        claude_watch_rolling_history=("${claude_watch_rolling_history[@]:1}")
+        claude_watch_rolling_failures=$((claude_watch_rolling_failures - evicted_bit))
+    fi
+}
+
 terminate_process_group() {
     local pgid="$1"
     local expected_pattern="$2"
@@ -1120,13 +1139,7 @@ This is Cycle #$loop_count. Act decisively."
         # and would otherwise never trip the consecutive check below. See
         # docs/devops/2026-07-24-cycle28-hardening-design.md for default
         # justification (M/N derived from CLAUDE_WATCH_AUTO_DISABLE_THRESHOLD).
-        claude_watch_rolling_history+=("$CLAUDE_WATCH_ATTRIBUTABLE_FAILURE")
-        claude_watch_rolling_failures=$((claude_watch_rolling_failures + CLAUDE_WATCH_ATTRIBUTABLE_FAILURE))
-        if [ "${#claude_watch_rolling_history[@]}" -gt "$CLAUDE_WATCH_ROLLING_WINDOW_SIZE" ]; then
-            evicted_bit="${claude_watch_rolling_history[0]}"
-            claude_watch_rolling_history=("${claude_watch_rolling_history[@]:1}")
-            claude_watch_rolling_failures=$((claude_watch_rolling_failures - evicted_bit))
-        fi
+        rolling_window_record "$CLAUDE_WATCH_ATTRIBUTABLE_FAILURE" "$CLAUDE_WATCH_ROLLING_WINDOW_SIZE"
 
         # --- Strictly-consecutive check (unchanged from cycle 27) ---
         if [ "$CLAUDE_WATCH_ATTRIBUTABLE_FAILURE" -eq 1 ]; then
